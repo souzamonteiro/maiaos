@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "apps": [
+    {
+      "name": "Maia Calculator",
+      "manifest": "examples/calculator/manifest.json"
+    },
+    {
+      "name": "Maia Clock",
+      "manifest": "examples/clock/manifest.json"
+    }
+  ]
+}

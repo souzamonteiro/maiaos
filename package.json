@@ -1,0 +1,15 @@
+{
+  "name": "maiaos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MaiaOS architecture and desktop proof of concept",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build:kernel": "bash scripts/build-kernel-wasm.sh",
+    "build:apps": "bash scripts/build-calculator-wasm.sh && bash scripts/build-clock-wasm.sh",
+    "build:lvgl": "bash scripts/build-lvgl-wasm.sh",
+    "test:lvgl-host": "node scripts/test-lvgl-host.mjs",
+    "demo": "node platform/desktop-web/server.js"
+  }
+}

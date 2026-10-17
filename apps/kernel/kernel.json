@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "id": "org.maiaos.kernel",
+  "name": "MaiaOS Kernel Guest",
+  "version": "0.1.0",
+  "entry": "kernel.wasm",
+  "entryExport": "maiaos_start",
+  "stepExport": "maiaos_step",
+  "abi": "maiaos-0",
+  "wasmProfile": "maiaos-embedded-v0",
+  "capabilities": [
+    "gfx.window",
+    "gfx.label",
+    "gfx.label.set_text",
+    "gfx.button",
+    "events.poll",
+    "log.write",
+    "vfs.open",
+    "vfs.read",
+    "vfs.write",
+    "vfs.close"
+  ],
+  "limits": {
+    "memoryPages": 32,
+    "openFiles": 4
+  }
+}

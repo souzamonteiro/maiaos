@@ -1,0 +1,4 @@
+build/
+platform/desktop-web/generated/
+apps/examples/calculator/app.wasm
+apps/examples/clock/app.wasm

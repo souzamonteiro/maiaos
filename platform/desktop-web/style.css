@@ -1,0 +1,106 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #10171c;
+  color: #e6f3ee;
+  font:
+    14px system-ui,
+    sans-serif;
+}
+
+header,
+footer {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 24px;
+  background: #1b252b;
+}
+
+footer {
+  flex-wrap: wrap;
+}
+
+header b {
+  font-size: 22px;
+  letter-spacing: 2px;
+}
+
+header b span {
+  color: #58c5a0;
+}
+
+header small {
+  color: #a3b8b3;
+}
+
+main {
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+/* This canvas is only the pixel sink for LVGL's RGB565 flush callback. */
+canvas {
+  width: min(100%, 1280px);
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #3e5d59;
+  box-shadow: 0 20px 50px #0008;
+  touch-action: none;
+}
+
+#status {
+  min-height: 1.5em;
+  color: #c3d2cc;
+}
+
+input,
+select,
+select,
+button {
+  min-height: 38px;
+  border: 1px solid #45635c;
+  border-radius: 4px;
+  padding: 7px 10px;
+  background: #202e33;
+  color: #e6f3ee;
+}
+
+button {
+  background: #286d5b;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #358a70;
+}
+
+#entry-export,
+#step-export {
+  width: 150px;
+}
+
+#app-select {
+  min-width: 170px;
+}
+
+#app-status {
+  min-height: 1.5em;
+  color: #9edcc8;
+}
+
+@media (max-width: 700px) {
+  header,
+  footer {
+    flex-wrap: wrap;
+    padding: 12px;
+  }
+
+  main {
+    padding: 10px 0;
+  }
+}

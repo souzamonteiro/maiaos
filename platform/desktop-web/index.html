@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MaiaOS Browser Host</title>
+    <link rel="stylesheet" href="/platform/desktop-web/style.css" />
+  </head>
+  <body>
+    <header>
+      <b>MAIA<span>OS</span></b>
+      <small
+        >LVGL-WASM image callback · Native browser WASM reference runtime</small
+      >
+    </header>
+    <main>
+      <canvas
+        id="screen"
+        width="1280"
+        height="720"
+        tabindex="0"
+        aria-label="LVGL-rendered MaiaOS guest display"
+      ></canvas>
+    </main>
+    <footer>
+      <label for="app-select">Applications</label>
+      <select id="app-select">
+        <option value="">Loading catalog…</option>
+      </select>
+      <button id="run-app" type="button">Run app</button>
+      <span id="app-status">Kernel launcher ready</span>
+      <label for="guest-file">Guest module</label>
+      <input id="guest-file" type="file" accept=".wasm,application/wasm" />
+      <label for="entry-export">Entry export</label>
+      <input id="entry-export" value="maiaos_start" autocomplete="off" />
+      <label for="step-export">Step export</label>
+      <input id="step-export" value="maiaos_step" autocomplete="off" />
+      <button id="load-guest" type="button">Load guest</button>
+      <span id="status">Loading LVGL host and guest WASM…</span>
+    </footer>
+    <script type="module" src="/platform/desktop-web/main.js"></script>
+  </body>
+</html>
