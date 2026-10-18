@@ -1,0 +1,59 @@
+{
+  "valid": [
+    { "name": "empty input", "source": "", "rules": ["Input"] },
+    { "name": "simple command", "source": "echo hello\n", "rules": ["SimpleCommand", "CommandName", "CommandTail"] },
+    { "name": "multiple arguments", "source": "printf a b c\n", "rules": ["CommandTail", "Word"] },
+    { "name": "assignment only", "source": "name=value\n", "rules": ["Assignment"] },
+    { "name": "assignment before command", "source": "name=value echo hi\n", "rules": ["Assignment", "CommandName"] },
+    { "name": "assignment-looking argument", "source": "echo name=value\n", "rules": ["CommandTail", "Word"] },
+    { "name": "output redirection", "source": "echo hi > output.txt\n", "rules": ["Redirection", "RedirectionOperator"] },
+    { "name": "append and descriptor redirections", "source": "echo hi >> output.txt 2>&1\n", "rules": ["Redirection"], "tokens": ["IO_NUMBER"] },
+    { "name": "input redirection", "source": "cat < input.txt\n", "rules": ["Redirection"] },
+    { "name": "redirection before command", "source": "> output.txt echo hi\n", "rules": ["PrefixItem", "Redirection", "CommandName"] },
+    { "name": "pipeline", "source": "echo abc | tr a-z A-Z\n", "rules": ["Pipeline", "CommandTail"] },
+    { "name": "and list", "source": "true && echo ok\n", "rules": ["AndOr", "AndOrOperator"] },
+    { "name": "or list", "source": "false || echo recovered\n", "rules": ["AndOr", "AndOrOperator"] },
+    { "name": "sequential list", "source": "pwd; ls\n", "rules": ["SeparatorOp", "CompleteCommand"] },
+    { "name": "background list", "source": "sleep 1 &\n", "rules": ["SeparatorOp", "CompleteCommand"] },
+    { "name": "if then else", "source": "if true; then echo yes; else echo no; fi\n", "rules": ["IfClause", "CompoundList"] },
+    { "name": "if elif", "source": "if false; then echo no; elif true; then echo yes; fi\n", "rules": ["IfClause"] },
+    { "name": "while loop", "source": "while false; do echo loop; done\n", "rules": ["WhileClause", "DoGroup"] },
+    { "name": "until loop", "source": "until true; do echo loop; done\n", "rules": ["UntilClause", "DoGroup"] },
+    { "name": "for loop with words", "source": "for name in a b; do echo $name; done\n", "rules": ["ForClause", "Name", "WordList"] },
+    { "name": "for loop with positional parameters", "source": "for name; do echo $name; done\n", "rules": ["ForClause", "SequentialSeparator"] },
+    { "name": "subshell", "source": "(echo sub; pwd)\n", "rules": ["Subshell", "CompoundList"] },
+    { "name": "brace group", "source": "{ echo brace; }\n", "rules": ["BraceGroup", "CompoundList"] },
+    { "name": "blank lines and multiple commands", "source": "\n\necho one\necho two\n", "rules": ["NewlineList", "CompleteCommand"] },
+    { "name": "comments", "source": "# heading\necho hi # trailing comment\n", "rules": ["SimpleCommand"] },
+    { "name": "quoted word", "source": "echo \"two words\"\n", "rules": ["Word"], "tokens": ["WORD"] },
+    { "name": "single quoted word", "source": "echo 'two words'\n", "rules": ["Word"], "tokens": ["WORD"] },
+    { "name": "mixed quoted fragments", "source": "echo pre'fix'\"tail\"\n", "rules": ["Word"], "tokens": ["WORD"] },
+    { "name": "escaped blank", "source": "echo one\\ two\n", "rules": ["Word"], "tokens": ["WORD"] },
+    { "name": "line break after pipeline operator", "source": "echo a |\ncat\n", "rules": ["Pipeline", "Linebreak"] },
+    { "name": "line break after and operator", "source": "echo a &&\necho b\n", "rules": ["AndOr", "Linebreak"] },
+    { "name": "script loaded from a file", "file": "fixtures/demo.sh", "rules": ["SimpleCommand", "Assignment", "Redirection", "AndOr"], "tokens": ["ASSIGNMENT_WORD"] }
+  ],
+  "invalid": [
+    { "name": "bare double semicolon", "source": ";;\n" },
+    { "name": "repeated sequential separators", "source": "echo a; ; echo b\n" },
+    { "name": "adjacent pipeline operators", "source": "echo a | | cat\n" },
+    { "name": "missing redirection target", "source": "echo >\n" },
+    { "name": "missing fi", "source": "if true; then echo yes\n" },
+    { "name": "unclosed subshell", "source": "(echo hi\n" },
+    { "name": "missing done", "source": "for item in a; do echo $item\n" },
+    { "name": "trailing and operator", "source": "echo hi &&\n" },
+    { "name": "orphan reserved word", "source": "then\n" }
+  ],
+  "posixGaps": [
+    {
+      "name": "reserved word used as an argument",
+      "source": "echo if\n",
+      "gap": "POSIX classifies reserved words by parser context; this generated lexer reserves if globally."
+    },
+    {
+      "name": "IO_NUMBER must be adjacent to redirection",
+      "source": "echo 2 > file\n",
+      "gap": "POSIX treats 2 as an argument when blank-separated from >; the current grammar classifies it as IO_NUMBER."
+    }
+  ]
+}
