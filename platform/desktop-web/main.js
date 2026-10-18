@@ -301,6 +301,7 @@ async function boot() {
 
   document.getElementById("load-guest").addEventListener("click", () => {
     const input = document.getElementById("guest-file");
+    const manifestInput = document.getElementById("guest-manifest");
     const entry = document.getElementById("entry-export").value.trim();
     const step = document.getElementById("step-export").value.trim();
     const loadSelected =
@@ -315,19 +316,29 @@ async function boot() {
               return response.arrayBuffer();
             },
           );
-    loadSelected
-      .then(async (bytes) => {
+    const loadManifest =
+      manifestInput.files && manifestInput.files[0]
+        ? manifestInput.files[0].text().then((text) => JSON.parse(text))
+        : Promise.resolve(kernelManifest);
+    Promise.all([loadSelected, loadManifest])
+      .then(async ([bytes, manifest]) => {
+        const role = manifest.id === kernelManifest.id ? "kernel" : "app";
         for (const process of [...runningProcesses]) stopProcess(process, -1);
         graphicsCallbacks.reset();
         buttonOwners.clear();
-        kernelProcess = await startProcess({
-          manifest: kernelManifest,
+        const process = await startProcess({
+          manifest,
           bytes: new Uint8Array(bytes),
-          role: "kernel",
+          role,
           entryName: entry,
           stepName: step,
         });
-        status.textContent = `Kernel running in ${kernelProcess.runtime.backendId}; LVGL-WASM callbacks active.`;
+        kernelProcess = role === "kernel" ? process : null;
+        if (role === "app") {
+          document.getElementById("app-status").textContent =
+            `${process.name} running as PID ${process.pid}.`;
+        }
+        status.textContent = `${process.name} running in ${process.runtime.backendId}; LVGL-WASM callbacks active.`;
       })
       .catch(reportError);
   });

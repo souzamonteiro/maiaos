@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-git pull
 git pull --recurse-submodules
-git submodule init
-git submodule update --remote --recursive
+git submodule sync --recursive
+git submodule update --init --remote --recursive
