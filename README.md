@@ -2,6 +2,8 @@
 
 # MaiaOS
 
+![alt text](images/MaiaOS_Architecture.png)
+
 **A WebAssembly-first, portable embedded application operating environment.**
 
 MaiaOS is designed to run on desktop hosts during development and on the M5Stack Tab5 (ESP32-P4) in production. The initial OS kernel is written in freestanding C++98 and compiled to `kernel.wasm`; it calls only platform-neutral `maia.*` imports. The native device boot host supplies MaiaWASMVM, recovery, drivers, and native callbacks. In the browser, a wrapper temporarily uses the browser's native WebAssembly engine and JavaScript callbacks. The MaiaWASM VM remains a separate runtime project and will replace that browser reference engine when ready. The guest does not detect whether it is running in the browser or on the device.
