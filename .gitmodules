@@ -1,0 +1,3 @@
+[submodule "maiacpp"]
+	path = maiacpp
+	url = https://github.com/souzamonteiro/maiacpp.git
