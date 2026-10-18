@@ -2,6 +2,14 @@
 
 No calendar dates are promised; phases are gated by evidence.
 
+## Toolchain and artifact baseline
+
+- C++98 guest build: MaiaCpp AST-strict -> C89 -> MaiaC -> WebAssembly, using the recursive `maiacpp` submodule and its MaiaC, MaiaCC and MaiaWASM submodules.
+- Emscripten is used for the LVGL-WASM browser platform module only; it does not compile MaiaOS guests.
+- Implemented guests: `kernel.wasm`, Calculator and Clock.
+- Planned guests: `io.wasm`, `shell.wasm` and `desktop.wasm`; none has a guest source/build target yet.
+- The Espressif ROM/second-stage bootloader remains unchanged. Native MaiaOS platform firmware/boot host is a future device milestone; `platform/desktop-web/main.js` is the current browser boot coordinator.
+
 ## P0 — Browser callback contract prototype
 
 - C++98 MaiaOS kernel guest compiled to freestanding `kernel.wasm`.
@@ -11,7 +19,7 @@ No calendar dates are promised; phases are gated by evidence.
 - Unit tests and app manifest schema.
   **Exit:** `npm test`, Node LVGL/guest callback test, and browser image/input callback smoke checks pass.
 
-## P1 — Reuse MaiaWASM and MaiaJS
+## P1 — Integrate MaiaWASMVM and MaiaJS
 
 - Audit existing disassembler validator coverage, decoder data structures and license.
 - Import via adapter/submodule, preserving upstream history.

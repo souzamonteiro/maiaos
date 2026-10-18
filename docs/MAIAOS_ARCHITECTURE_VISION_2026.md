@@ -1,10 +1,10 @@
 # MaiaOS — Updated Architecture, Product Vision and Implementation Plan
 
-**Version:** 0.2 (architecture proposal)  
-**Date:** 2026-10-17  
-**Status:** Design baseline; not an implementation-complete specification  
+**Version:** 0.3 (architecture proposal)
+**Date:** 2026-10-18
+**Status:** Updated design baseline; implementation status is stated per artifact below
 **Target:** M5Stack Tab5 / ESP32-P4, with keyboard accessory; browser simulator first  
-**Languages:** C++98 for the initial MaiaOS kernel guest; JavaScript ES8 for MaiaWASMVM development and browser callbacks; C89 generation remains a separate VM/device portability path. WebAssembly 3.0 is a target with an explicitly constrained embedded execution profile.
+**Languages and toolchain:** C++98 WASM guests use MaiaCpp AST-strict -> C89 -> MaiaC -> MaiaWASM. MaiaCC generates parsers from EBNF. MaiaJS remains the ES8 -> C89 toolchain for JavaScript-authored components where selected. Emscripten is used for the separate LVGL-WASM browser platform module, not for MaiaOS guest modules. WebAssembly 3.0 is a target with an explicitly constrained embedded execution profile.
 
 > This document consolidates the MaiaOS decisions made after the initial GitHub starter package. It supersedes conflicting _architectural intentions_ in earlier notes but does not imply that unimplemented components are working. In particular, **MaiaWASMVM is currently under implementation**, and bugs found in **MaiaDisassembler** are being corrected. Those defects must be tracked and regression-tested, not assumed resolved.
 
@@ -26,7 +26,7 @@ The primary development environment will be a **web-based Tab5 simulator**, whic
 
 1. **One portable ABI:** the C++98 kernel guest and user applications use stable `maia.*` imports, opaque handles, bounded messages and UTF-8 buffers.
 2. **VM separate from OS:** MaiaWASMVM knows about modules, validation, linear memory, execution and host imports; it does not depend on LVGL, SD or FreeRTOS.
-3. **C++98 kernel guest:** compile the initial kernel directly to freestanding WASM; it calls system services only through imports. Keep MaiaWASMVM's ES8 implementation and C89 device port separate.
+3. **Maia Suite guest pipeline:** compile C++98 guests through MaiaCpp AST-strict -> C89 -> MaiaC -> MaiaWASM; guests call system services only through imports. Keep MaiaWASMVM's ES8 implementation and C89 device port separate.
 4. **Small native host:** ESP-IDF/FreeRTOS, MaiaWASMVM, drivers, LVGL/display integration, storage, recovery, and the device callback table are native.
 5. **Replaceable browser host:** while MaiaWASMVM is in progress, browser/Node native WebAssembly executes the same kernel guest; JavaScript supplies the same `maia.*` callbacks.
 6. **WASM-first userland:** system programs and services move to `.wasm` as the VM, toolchain and resource budget permit.
@@ -38,7 +38,8 @@ The primary development environment will be a **web-based Tab5 simulator**, whic
 
 ```mermaid
 flowchart TB
-    TOOL[MaiaC / MaiaCpp / MaiaJS / MaiaCC / Emscripten] -->|compile C++98 kernel and apps| WASM[kernel.wasm / app.wasm + manifest]
+    TOOL[MaiaCC / MaiaCpp / MaiaC / MaiaWASM / MaiaJS] -->|C++98: MaiaCpp -> C89 -> MaiaC -> WASM| WASM[kernel.wasm / app.wasm + manifest]
+    Emscripten -->|LVGL browser platform module only| LVGLWASM[LVGL-WASM]
     TOOL -->|MaiaJS C89 port when ready| NATIVE[MaiaWASMVM native core]
     WASM --> STORE[Virtual SD / microSD]
     STORE --> LOADER[MaiaOS module loader]
@@ -60,7 +61,7 @@ flowchart TB
 
 | Layer       | Responsibilities                                                    | Portable implementation                                             | Platform-specific implementation                          |
 | ----------- | ------------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- |
-| Toolchain   | Compile C++98 kernel/apps to WASM; separately compile ES8/C89 tools | Existing Maia projects; Emscripten for kernel prototype             | Compiler toolchain/host build                             |
+| Toolchain   | Compile C++98 guests to WASM; separately compile selected ES8/C89 components | Recursive MaiaCpp submodule containing MaiaC, MaiaCC and MaiaWASM; MaiaJS where selected | Emscripten for LVGL-WASM browser platform module only |
 | MaiaWASMVM  | Decode, validate, instantiate, execute, trap, import linking        | JS reference; generated C89 or independently checked native backend | Time slices, allocation and task integration              |
 | MaiaOS core | Kernel entry, process table, handles, permissions, scheduler policy | C++98 `kernel.wasm` guest                                           | Native boot host and FreeRTOS hooks                       |
 | MaiaIPC     | Mailboxes, bounded messages, request/reply, events                  | Shared wire protocol                                                | Queue and synchronization adapters                        |
@@ -68,6 +69,21 @@ flowchart TB
 | MaiaGFX     | Windows, widgets, input events, rendering commands                  | Shared graphics protocol                                            | Browser LVGL-WASM callbacks; native device LVGL callbacks |
 | MaiaInput   | Keyboard, touch, focus and shortcuts                                | Normalized event model                                              | DOM; Tab5 I2C keyboard/touch                              |
 | System apps | Shell, Terminal, Files, Editor, Settings, Monitor                   | WASM userland target                                                | None except through ABI                                   |
+
+### Boot artifacts and implementation status
+
+| Component/artifact | Status | Notes |
+|---|---|---|
+| Espressif ROM and second-stage bootloader | Existing platform chain | Preserved; MaiaOS does not replace it. |
+| MaiaOS native boot host / Tab5 firmware | Planned | Initializes MaiaWASMVM, drivers, recovery and host imports. |
+| Browser boot coordinator | Implemented | `platform/desktop-web/main.js`; it starts the kernel and catalog apps using the native browser WASM reference engine. A separate `bootloader.js` is not present. |
+| `kernel.wasm` | Implemented | C++98 guest built through MaiaCpp -> MaiaC; uses the `maia.*` ABI. |
+| `io.wasm` | Planned | Future guest/service boundary for TTY and I/O; no module source or build target exists yet. |
+| `shell.wasm` | Planned | Future command shell; only EBNF grammar/parser tests exist, not a shell runtime. |
+| `desktop.wasm` | Planned | Future graphical desktop/session guest; it is distinct from the current LVGL-WASM browser platform module. |
+| Calculator and Clock `app.wasm` | Implemented | C++98 example apps built through MaiaCpp -> MaiaC and launched with manifests. |
+
+The intended system layering is platform boot host -> `kernel.wasm` -> I/O service (`io.wasm`) -> command shell (`shell.wasm`) and graphical desktop (`desktop.wasm`). This is a target decomposition, not a claim that the planned guests are already implemented or that their final IPC/boot protocol is frozen.
 
 ## 4. Boot and recovery
 

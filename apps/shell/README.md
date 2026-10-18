@@ -6,7 +6,7 @@
 
 ```mermaid
 flowchart TD
- B[bootloader.js] --> K[kernel.wasm]
+ B[Platform boot coordinator] --> K[kernel.wasm]
  B --> I[io.wasm]
  B --> S[shell.wasm]
  B --> D[desktop.wasm - optional]
@@ -21,16 +21,17 @@ flowchart TD
 
 The browser is the real host. Separate WASM modules do not magically share memory or link symbols. Implement a **versioned C ABI** through JS import/export dispatch and copy buffers across separate linear memories. A single shared-memory design is a separate, advanced option requiring compatible toolchains and browser isolation.
 
-## REx parser generation
+The diagram is the target module decomposition. The current browser coordinator is `platform/desktop-web/main.js`; there is no separate `bootloader.js`, and only the kernel, Calculator and Clock guests currently have buildable WASM sources. `io.wasm`, `shell.wasm` and `desktop.wasm` remain planned artifacts. Every C++98 guest is intended to use MaiaCpp AST-strict -> C89 -> MaiaC -> WASM; the LVGL-WASM browser platform module is the only current Emscripten-built module.
 
-Reference: https://github.com/GuntherRademacher/rex-parser-generator and https://www.bottlecaps.de/rex/ . REx accepts W3C-style EBNF and supports C++ generation. The supplied grammar uses `::=`, `*`, `+`, `?`, character classes, `<?TOKENS?>`, and `/* ws: definition */`.
+## MaiaCC parser generation
 
-1. Open REx or install its CLI from the official project.
-2. Load `maia-shell.ebnf`.
-3. Select C++ output, tree support, and a parsing algorithm compatible with the grammar; inspect diagnostics.
-4. Fix conflicts and lexer token priorities, regenerate, and run parser fixtures.
-5. Commit generated sources under `generated/` and record REx version and exact invocation in `docs/generation-log.md`.
-6. Compile generated C++ sources with the Emscripten SDK into `shell.wasm`, together with scanner, AST builder, expansion engine, and executor.
+The shell grammar source is `apps/shell/maia-shell.ebnf`. Parser generation is owned by the in-repository MaiaCC toolchain (`maiacpp/maiacc`); REx is an internal stage of MaiaCC's EBNF pipeline, not a separate compiler dependency for MaiaOS. The current test runner generates a temporary JavaScript parser and parse-tree collector to validate grammar fixtures. It does not produce `shell.wasm` or implement command execution.
+
+1. Edit only `apps/shell/maia-shell.ebnf` for grammar changes; never hand-edit generated parsers.
+2. Use the MaiaCC parser generator from the recursive submodule and regenerate the target parser from EBNF.
+3. Run the shell grammar fixtures and validate lexer/parser token and source-offset agreement.
+4. Keep the temporary JavaScript parser used by this test harness distinct from the future shell runtime parser/guest.
+5. When shell execution is implemented, compile the C++98 guest through MaiaCpp AST-strict -> C89 -> MaiaC -> WASM; do not use Emscripten for `shell.wasm`.
 
 **Important:** the grammar is only a structural subset. It covers basic simple commands, assignments, file redirections, pipelines, AND/OR lists, subshells, brace groups, `if`, `while`, `until`, and `for`. It does not yet cover `case`, function definitions, here-document bodies, or POSIX word expansion. Its quoted-word lexer is deliberately limited. It also treats reserved words globally and recognizes digit-only tokens as `IO_NUMBER` without checking that they are adjacent to `<` or `>`; POSIX 2.10 requires parser-context classification for reserved words, `NAME`, `ASSIGNMENT_WORD`, and `IO_NUMBER`. These cases require a stateful/context-aware scanner or parser integration, not a change to the grammar productions alone. No POSIX-conformance claim should be made until those rules are implemented and differentially tested.
 
@@ -40,18 +41,18 @@ The current grammar was generated to a temporary JavaScript parser with MaiaCC a
 
 The runner regenerates the JS parser into the OS temporary directory, parses the scenario corpus, checks expected production rules, and compares every parse-tree terminal with the lexer's token stream and source offsets. Generated parser files are removed when the run ends.
 
-Set `MAIACC_ROOT` to a MaiaCC checkout, then run the suite:
+Point `MAIACC_ROOT` at the in-repository MaiaCC submodule, then run the suite:
 
 ```sh
-MAIACC_ROOT=/path/to/maiacc npm run test:shell-grammar
+MAIACC_ROOT="$PWD/maiacpp/maiacc" npm run test:shell-grammar
 ```
 
 Print every accepted fixture tree, or inspect a script/command directly:
 
 ```sh
-MAIACC_ROOT=/path/to/maiacc npm run test:shell-grammar -- --print-trees
-MAIACC_ROOT=/path/to/maiacc npm run test:shell-grammar -- --file apps/shell/tests/fixtures/demo.sh
-MAIACC_ROOT=/path/to/maiacc npm run test:shell-grammar -- --input 'echo hello | wc -l'
+MAIACC_ROOT="$PWD/maiacpp/maiacc" npm run test:shell-grammar -- --print-trees
+MAIACC_ROOT="$PWD/maiacpp/maiacc" npm run test:shell-grammar -- --file apps/shell/tests/fixtures/demo.sh
+MAIACC_ROOT="$PWD/maiacpp/maiacc" npm run test:shell-grammar -- --input 'echo hello | wc -l'
 ```
 
 The default run reports known POSIX lexical gaps separately. Add `--strict-posix` to make those gaps fail the command while contextual tokenization remains unfinished.

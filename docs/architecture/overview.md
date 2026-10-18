@@ -19,13 +19,13 @@ flowchart TB
 
 **Platform**: implements display, touch, monotonic clock, file I/O, synchronization, networking and reboot using platform APIs.
 
-**MaiaOS guest and applications**: the initial kernel guest is written in C++98 and compiled to `/system/kernel.wasm`; user applications are also `.wasm` modules plus manifests. The native platform boot host loads the kernel through MaiaWASMVM; a recovery firmware UI remains available if storage or the guest fails.
+**MaiaOS guest and applications**: the implemented kernel guest is written in C++98 and compiled to `/system/kernel.wasm`; Calculator and Clock are C++98 WASM example apps with manifests. C++98 guests use MaiaCpp AST-strict -> C89 -> MaiaC -> WASM, with MaiaCC and MaiaWASM from the recursive in-repository toolchain submodules. `io.wasm`, `shell.wasm` and `desktop.wasm` are planned artifacts, not implemented modules. The native platform boot host that loads the kernel through MaiaWASMVM remains planned; browser startup currently uses `platform/desktop-web/main.js` and the native browser WebAssembly reference engine.
 
 ## Execution options
 
 - **Development**: browser or Node native WebAssembly engine as a temporary reference backend, with LVGL as the UI renderer. Browser JavaScript only presents LVGL's flushed image buffers; it does not draw widgets. This is not evidence of MaiaVM correctness.
-- **Conformance**: MaiaWASM ES8 interpreter running under Node and compared against reference execution.
-- **Device**: boot/firmware loads the MaiaOS WASM guest; the host supplies the same `maia.*` callbacks through native LVGL, drivers, and services. MaiaWASMVM replaces the native reference engine when its implementation is ready. Build integration is a pending proof point.
+- **Conformance**: MaiaWASMVM ES8 interpreter running under Node and compared against reference execution.
+- **Device**: boot/firmware will load the MaiaOS WASM guest; the host supplies the same `maia.*` callbacks through native LVGL, drivers, and services. MaiaWASMVM replaces the native reference engine when its implementation is ready. The MaiaCpp -> MaiaC guest build is integrated; device firmware/runtime integration remains pending.
 
 ## Core vs. OS
 

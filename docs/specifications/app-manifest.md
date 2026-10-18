@@ -1,6 +1,8 @@
 # Application packaging v0
 
-An application is a directory containing `app.wasm`, `manifest.json`, optional assets and an optional signature. Packages are stored under `/apps/<id>/`. The C++98 MaiaOS kernel guest is `/system/kernel.wasm` with `/system/kernel.json`; the native device boot host and browser wrapper read the same entry metadata and supply platform callbacks.
+An application is a directory containing `app.wasm`, `manifest.json`, optional assets and an optional signature. Packages are stored under `/apps/<id>/`. The C++98 MaiaOS kernel guest is `/system/kernel.wasm` with `/system/kernel.json`; the native device boot host and browser wrapper read the same entry metadata and supply platform callbacks. The planned system service artifacts `io.wasm`, `shell.wasm` and `desktop.wasm` do not yet have sources or manifests.
+
+Current C++98 guests are built from source through MaiaCpp AST-strict -> C89 -> MaiaC -> WASM, using the recursive in-repository Maia toolchain submodules. Emscripten is used for the separate LVGL-WASM browser platform module only.
 
 The current kernel manifest selects `maiaos_start` as its entry export and `maiaos_step` as its scheduler-step export. The host invokes the entry once, then schedules the step export; guest events are consumed through `maia.events.poll` rather than direct host-to-guest function calls.
 

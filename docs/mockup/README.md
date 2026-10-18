@@ -23,6 +23,8 @@ This is a **visual and interaction prototype**, not LVGL/WASM, a complete operat
 
 ## Architecture next steps
 
+This is the original Canvas-mock plan and is superseded by the active LVGL-WASM host in `platform/desktop-web`. Emscripten now builds that separate LVGL platform module; MaiaOS C++98 guests use MaiaCpp -> MaiaC. The steps below are historical context, not the current build instructions.
+
 1. Extract `MaiaGFX` drawing primitives from the Canvas code.
 2. Separate input, VFS, IPC, and process management behind stable interfaces.
 3. Integrate MaiaWASMVM and real WASM loading from a virtual SD image.

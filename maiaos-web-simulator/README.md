@@ -4,7 +4,7 @@ This directory previously contained a Canvas-drawn mock desktop. It is no longer
 
 ## Build and run
 
-From the repository root, with Emscripten available (`EMSDK` defaults to `~/emsdk`):
+From the repository root, initialize the recursive MaiaCpp toolchain submodules and build the guests with MaiaCpp/MaiaC. Emscripten (`EMSDK` defaults to `~/emsdk`) is required only for the separate LVGL-WASM browser platform module:
 
 ```sh
 npm run build:lvgl
@@ -12,6 +12,8 @@ npm run demo
 ```
 
 Open <http://localhost:8080>. The page starts the LVGL-WASM host and kernel, then fills Applications from `apps/catalog.json`. Maia Calculator and Maia Clock launch as separate WASM instances, each with its own memory, event queue and app-private VFS namespace. The kernel continues running behind an app window; its close button destroys only that process's window.
+
+The guest build path is C++98 -> MaiaCpp AST-strict -> C89 -> MaiaC -> WASM. `kernel.wasm`, Calculator and Clock are implemented; `io.wasm`, `shell.wasm` and `desktop.wasm` remain planned. The LVGL-WASM module is a platform renderer, not `desktop.wasm`.
 
 The LVGL build is pinned to 9.3.0. To use an existing source checkout instead of FetchContent:
 

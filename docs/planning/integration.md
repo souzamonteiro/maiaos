@@ -1,10 +1,14 @@
-# Existing Maia suite integration
+# Maia Suite integration
 
-Existing MaiaJS, MaiaC, MaiaCpp, MaiaCC and MaiaWASM repositories are **not copied** into this scaffold because their source and exact URLs have not been supplied. Do not invent repository APIs.
+MaiaOS uses the Maia Suite through the `maiacpp` Git submodule. MaiaCpp contains nested submodules for MaiaC, MaiaCC and MaiaWASM; `git submodule update --init --recursive` materializes the complete compiler toolchain. The MaiaOS `./git_pull.sh` helper synchronizes the parent repository and recursively initializes/updates those submodules.
+
+Normal builds must use these in-repository checkouts, not sibling directories or an npm-installed compiler. The parent gitlink pins the MaiaCpp commit, and MaiaCpp's gitlinks pin the nested compiler commits. Review and commit pointer changes in the relevant parent repository when intentionally advancing the toolchain.
+
+The current kernel, Calculator and Clock guests are C++98 and use `maiacpp/bin/webcpp.sh --ast-strict`. MaiaCpp lowers C++98 to C89; MaiaC compiles that C to WASM, with MaiaWASM assembling/validating the module. MaiaCC generates parsers from their owning EBNF grammars. Emscripten is reserved for the separate LVGL-WASM browser platform module, not MaiaOS guest binaries.
 
 ## Suggested approach
 
-- Preserve original projects and history; integrate with pinned Git submodules or a reproducible dependency script after review.
+- Preserve original projects and history through the pinned recursive Git submodules.
 - Add a `maiawasm-core` adapter that consumes existing decoded module structures if stable.
 - Make MaiaJS-generated C89 a reproducible artifact, never manually edit generated files.
 - Pin compiler version, feature flags, input SHA-256 and generated output SHA-256.
