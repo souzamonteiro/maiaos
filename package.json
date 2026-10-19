@@ -8,6 +8,7 @@
     "test": "node --test tests/*.test.js",
     "build:kernel": "bash scripts/build-kernel-wasm.sh",
     "build:apps": "bash scripts/build-calculator-wasm.sh && bash scripts/build-clock-wasm.sh",
+    "build:shell": "bash scripts/build-shell-wasm.sh",
     "build:lvgl": "bash scripts/build-lvgl-wasm.sh",
     "test:shell-grammar": "bash scripts/test-shell-grammar.sh",
     "test:lvgl-host": "node scripts/test-lvgl-host.mjs",

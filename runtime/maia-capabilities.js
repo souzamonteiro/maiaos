@@ -1,4 +1,6 @@
 const IMPORT_CAPABILITIES = Object.freeze({
+  "env.__malloc": "memory.alloc",
+  "env.__free": "memory.free",
   "maia.gfx.window_create": "gfx.window",
   "maia.gfx.label_create": "gfx.label",
   "maia.gfx.label_set_text": "gfx.label.set_text",
@@ -9,6 +11,8 @@ const IMPORT_CAPABILITIES = Object.freeze({
   "maia.vfs.read": "vfs.read",
   "maia.vfs.write": "vfs.write",
   "maia.vfs.close": "vfs.close",
+  "maia.tty.poll_line": "tty.input",
+  "maia.tty.write": "tty.output",
   "maia.time.monotonic_ms": "time.monotonic",
   "maia.process.exit": "process.exit",
   "maia.log.write": "log.write",

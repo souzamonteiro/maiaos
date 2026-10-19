@@ -39,6 +39,7 @@ function readGuestText(memory, pointer, length) {
 export function createMaiaHostImports({
   graphics,
   vfs,
+  tty = null,
   log = () => {},
   monotonicMs = () => globalThis.performance.now(),
   onProcessExit = () => {},
@@ -60,11 +61,49 @@ export function createMaiaHostImports({
       throw new TypeError(`Missing VFS callback: ${name}`);
     }
   }
+  if (
+    tty &&
+    (typeof tty.pollLine !== "function" || typeof tty.write !== "function")
+  ) {
+    throw new TypeError("TTY must provide pollLine and write callbacks");
+  }
 
   let guestMemory = null;
+  let guestInstance = null;
+  let heapTop = null;
   const eventQueue = [];
   const text = (pointer, length) => readGuestText(guestMemory, pointer, length);
+  const allocate = (size) => {
+    if (!guestMemory || !Number.isFinite(Number(size))) return 0;
+    const requested = Math.max(1, Number(size) >>> 0);
+    const alignDown = (value) => Math.floor(value / 8) * 8;
+    if (heapTop === null) heapTop = guestMemory.buffer.byteLength;
+
+    const stackGlobal = guestInstance?.exports?.__stack_ptr;
+    const stackFloor = stackGlobal && Number.isFinite(Number(stackGlobal.value))
+      ? Math.max(1024, Number(stackGlobal.value))
+      : 1024;
+    let pointer = alignDown(heapTop - requested);
+    if (pointer < stackFloor) {
+      try {
+        const missingBytes = stackFloor - pointer;
+        guestMemory.grow(Math.ceil(missingBytes / 65536) + 1);
+        heapTop = guestMemory.buffer.byteLength;
+        pointer = alignDown(heapTop - requested);
+      } catch {
+        return 0;
+      }
+    }
+    if (pointer < stackFloor) return 0;
+
+    heapTop = pointer;
+    return pointer;
+  };
   const imports = {
+    env: {
+      __malloc: allocate,
+      __free: () => {},
+    },
     "maia.gfx": {
       window_create: (pointer, length) =>
         graphics.windowCreate(text(pointer, length)),
@@ -153,6 +192,40 @@ export function createMaiaHostImports({
     },
   };
 
+  if (tty) {
+    imports["maia.tty"] = {
+      poll_line: (pointer, capacity) => {
+        if (!Number.isInteger(capacity) || capacity < 0) {
+          return STATUS.INVALID_ARGUMENT;
+        }
+        const line = tty.pollLine(capacity);
+        if (line === null || line === undefined) return STATUS.WOULD_BLOCK;
+        const bytes = new TextEncoder().encode(String(line));
+        if (bytes.byteLength > capacity) return STATUS.INVALID_ARGUMENT;
+        try {
+          validateGuestRange(guestMemory, pointer, bytes.byteLength);
+        } catch {
+          return STATUS.INVALID_ARGUMENT;
+        }
+        new Uint8Array(guestMemory.buffer, pointer, bytes.byteLength).set(bytes);
+        return bytes.byteLength;
+      },
+      write: (stream, pointer, length) => {
+        if ((stream !== 1 && stream !== 2) || !Number.isInteger(length)) {
+          return STATUS.INVALID_ARGUMENT;
+        }
+        let message;
+        try {
+          message = readGuestText(guestMemory, pointer, length);
+        } catch {
+          return STATUS.INVALID_ARGUMENT;
+        }
+        tty.write(stream, message);
+        return length;
+      },
+    };
+  }
+
   return Object.freeze({
     imports,
     status: STATUS,
@@ -164,11 +237,15 @@ export function createMaiaHostImports({
         );
       }
       guestMemory = memory;
+      guestInstance = instance;
+      heapTop = memory.buffer.byteLength;
     },
     attachMemory(memory) {
       if (!(memory instanceof WebAssembly.Memory))
         throw new TypeError("Expected a WebAssembly.Memory");
       guestMemory = memory;
+      guestInstance = null;
+      heapTop = memory.buffer.byteLength;
     },
     readGuestText(pointer, length) {
       return text(pointer, length);

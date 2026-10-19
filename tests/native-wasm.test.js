@@ -185,3 +185,49 @@ test("Maia host imports forward callbacks and validate guest memory", () => {
   );
   assert.equal(queueHost.queuedEventCount, 64);
 });
+
+test("Maia TTY imports poll UTF-8 lines and write bounded output", () => {
+  const lines = ["echo olá"];
+  const output = [];
+  const host = createMaiaHostImports({
+    vfs: new MemoryVfsAdapter(),
+    graphics: {
+      windowCreate: () => 1,
+      labelCreate: () => 2,
+      labelSetText: () => 0,
+      buttonCreate: () => 3,
+      objectDestroy: () => 0,
+    },
+    tty: {
+      pollLine: () => lines.shift() ?? null,
+      write: (stream, text) => output.push([stream, text]),
+    },
+  });
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  host.attachMemory(memory);
+
+  assert.equal(
+    host.imports["maia.tty"].poll_line(256, 32),
+    new TextEncoder().encode("echo olá").byteLength,
+  );
+  assert.equal(
+    new TextDecoder().decode(new Uint8Array(memory.buffer, 256, 9)),
+    "echo olá",
+  );
+  assert.equal(
+    host.imports["maia.tty"].poll_line(256, 32),
+    host.status.WOULD_BLOCK,
+  );
+
+  const message = new TextEncoder().encode("linha de saída\n");
+  new Uint8Array(memory.buffer, 512, message.length).set(message);
+  assert.equal(
+    host.imports["maia.tty"].write(1, 512, message.length),
+    message.length,
+  );
+  assert.deepEqual(output, [[1, "linha de saída\n"]]);
+  assert.equal(
+    host.imports["maia.tty"].write(1, 65530, 32),
+    host.status.INVALID_ARGUMENT,
+  );
+});

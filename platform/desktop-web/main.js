@@ -15,7 +15,12 @@ import {
 
 const screen = document.getElementById("screen");
 const status = document.getElementById("status");
+const ttyPanel = document.getElementById("tty-panel");
+const ttyOutput = document.getElementById("tty-output");
+const ttyInput = document.getElementById("tty-input");
 const BROWSER_HOST_GRANTS = [
+  "memory.alloc",
+  "memory.free",
   "gfx.window",
   "gfx.label",
   "gfx.label.set_text",
@@ -31,6 +36,9 @@ const BROWSER_HOST_GRANTS = [
 ];
 const runningProcesses = new Set();
 const buttonOwners = new Map();
+const TTY_QUEUE_LIMIT = 32;
+const TTY_LINE_LIMIT = 256;
+const TTY_OUTPUT_LIMIT = 12000;
 let lvglModule = null;
 let graphicsCallbacks = null;
 let kernelProcess = null;
@@ -39,6 +47,31 @@ let nextProcessId = 1;
 function reportError(error) {
   status.textContent = `Startup error: ${error.message}`;
   console.error(error);
+}
+
+function appendTtyOutput(text) {
+  ttyOutput.textContent += text;
+  if (ttyOutput.textContent.length > TTY_OUTPUT_LIMIT) {
+    ttyOutput.textContent = ttyOutput.textContent.slice(-TTY_OUTPUT_LIMIT);
+  }
+  ttyOutput.scrollTop = ttyOutput.scrollHeight;
+}
+
+function createProcessTty() {
+  const lines = [];
+  return {
+    pollLine() {
+      return lines.shift() ?? null;
+    },
+    write(stream, text) {
+      appendTtyOutput(stream === 2 ? `[stderr] ${text}` : text);
+    },
+    enqueueLine(line) {
+      if (lines.length >= TTY_QUEUE_LIMIT) return false;
+      lines.push(line);
+      return true;
+    },
+  };
 }
 
 function processGraphics(process) {
@@ -99,6 +132,9 @@ function stopProcess(process, exitCode) {
     document.getElementById("app-status").textContent =
       `${process.name} exited (${exitCode}).`;
   }
+  if (process.tty && ![...runningProcesses].some((candidate) => candidate.tty)) {
+    ttyPanel.hidden = true;
+  }
 }
 
 async function createAppVfs(appId) {
@@ -130,12 +166,17 @@ async function startProcess({ manifest, bytes, role, entryName, stepName }) {
     windowHandle: -1,
     runtime: null,
     host: null,
+    tty: manifest.capabilities.includes("tty.input")
+      && manifest.capabilities.includes("tty.output")
+      ? createProcessTty()
+      : null,
     vfs: await createAppVfs(manifest.id),
     stepExport: stepName || null,
   };
   process.host = createMaiaHostImports({
     graphics: processGraphics(process),
     vfs: process.vfs,
+    tty: process.tty,
     log: (level, message) => {
       status.textContent = message;
       (level >= 2 ? console.error : console.log)(
@@ -176,6 +217,10 @@ async function startProcess({ manifest, bytes, role, entryName, stepName }) {
   process.runtime = runtime;
   process.running = true;
   runningProcesses.add(process);
+  if (process.tty) {
+    ttyOutput.textContent = "";
+    ttyPanel.hidden = false;
+  }
   try {
     entry();
   } catch (error) {
@@ -348,6 +393,28 @@ async function boot() {
       document.getElementById("app-status").textContent = error.message;
       console.error("[maia app launcher]", error);
     });
+  });
+
+  document.getElementById("tty-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const process = [...runningProcesses].find(
+      (candidate) => candidate.running && candidate.tty,
+    );
+    if (!process) return;
+
+    const line = ttyInput.value;
+    if (new TextEncoder().encode(line).byteLength >= TTY_LINE_LIMIT) {
+      appendTtyOutput("input line too long\n");
+      return;
+    }
+    if (!process.tty.enqueueLine(line)) {
+      appendTtyOutput("input queue full\n");
+      return;
+    }
+
+    appendTtyOutput(`${line}\n`);
+    ttyInput.value = "";
+    ttyInput.focus();
   });
 
   screen.addEventListener("pointerdown", (event) => {

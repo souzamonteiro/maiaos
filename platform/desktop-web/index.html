@@ -40,6 +40,14 @@
       <button id="load-guest" type="button">Load guest</button>
       <span id="status">Loading LVGL host and guest WASM…</span>
     </footer>
+    <section id="tty-panel" aria-label="Maia Shell terminal" hidden>
+      <pre id="tty-output" aria-live="polite"></pre>
+      <form id="tty-form">
+        <label for="tty-input">Maia Shell</label>
+        <input id="tty-input" autocomplete="off" spellcheck="false" />
+        <button type="submit">Send</button>
+      </form>
+    </section>
     <script type="module" src="/platform/desktop-web/main.js"></script>
   </body>
 </html>

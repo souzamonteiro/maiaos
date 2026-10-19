@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "id": "org.maiaplatform.shell",
+  "name": "Maia Shell MVP",
+  "version": "0.1.0",
+  "entry": "shell.wasm",
+  "entryExport": "maia_app_start",
+  "stepExport": "maiaos_step",
+  "abi": "maiaos-0",
+  "wasmProfile": "maiaos-embedded-v0",
+  "capabilities": [
+    "memory.alloc",
+    "memory.free",
+    "tty.input",
+    "tty.output",
+    "vfs.open",
+    "vfs.read",
+    "vfs.close",
+    "process.exit"
+  ],
+  "limits": {
+    "memoryPages": 32,
+    "openFiles": 4
+  }
+}
