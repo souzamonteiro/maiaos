@@ -1,3 +1,6 @@
 [submodule "maiacpp"]
 	path = maiacpp
 	url = https://github.com/souzamonteiro/maiacpp.git
+[submodule "maiaregex"]
+	path = maiaregex
+	url = https://github.com/souzamonteiro/maiaregex.git
