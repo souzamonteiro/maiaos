@@ -2,6 +2,41 @@
 
 ## Current objective/result
 
+### Inline shell prompt/caret correction — 2026-10-20
+
+Owner opened the integrated-browser simulator and reported the caret below the
+`maia> ` prompt. Cause: prompt was in the output/history LVGL label while the
+editable input/caret was in the next vertically arranged LVGL label.
+
+Fixed only guest presentation: render prompt, edited text and caret together in
+the input label; append the submitted prompt/command to history on Enter. The
+display buffer is now 263 bytes (6 prompt +255 editable +1 caret +1 NUL), preserving
+all existing input limits. No graphics ABI/platform layout changes, handwritten
+parser/lexer, grammar/generator/compiler change or alternate GUI is involved.
+Changed shell.cpp, regenerated shell.wasm, host/LVGL test expectations and docs.
+
+Regression assertion fails against the old WASM with actual `|` versus expected
+`maia> |`. After `npm run build:shell -- --check-c89` PASS, both
+`npm run test:shell-host` and `npm run test:shell-lvgl` PASS: inline prompt/caret,
+mid-line editing, history, all commands/errors/bounds, 1000 repeated parses,
+stable restored stack and 18 memory pages. Real LVGL produced 1269 RGB565 flushes.
+New WASM 1182705 bytes, SHA256
+8aff50c34d878b3f7dbf6deaad480d6fb71b0290051fdfbfb630014fc4b70e67.
+Logs /tmp/maiaos-shell-inline-prompt-build.log,
+/tmp/maiaos-shell-inline-prompt-before.log (expected old-artifact failure),
+/tmp/maiaos-inline-prompt-test-shell-host.log and
+/tmp/maiaos-inline-prompt-test-shell-lvgl.log. git diff --check passes.
+
+User confirmed actual browser launch before the fix. Agent browser discovery
+still returns no available backend, so agent visual/browser interaction after
+the correction is UNRUN; real LVGL rendering/keyboard guest tests above pass.
+The already-running demo server serves the regenerated shell.wasm at the same
+URL; refresh the page and relaunch Maia Shell MVP to load it.
+
+main remains local commit 0be4de0. This follow-up is local/uncommitted (six files),
+no new commit/push, versions or gitlinks. Previous MaiaCC commit is 176ea3b.
+Next safe action is owner browser confirmation; no builds/tests remain active.
+
 ### Authorized local snapshot commits — 2026-10-20
 
 The owner explicitly requested committing ALL reviewed pending files in MaiaCC

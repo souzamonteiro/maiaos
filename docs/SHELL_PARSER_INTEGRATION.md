@@ -24,7 +24,8 @@ was introduced.
 - `apps/shell/shell.cpp`: generated lexer/parser entry points, per-call collector,
   compiler-owned static buffers, separate syntax/capacity/unsupported results.
   Removed literal linear-memory addresses, including the former 8192 base.
-  The input-display buffer has 257 bytes for 255 editable bytes + caret + NUL.
+  The input-display buffer now has 263 bytes for the six-byte prompt, 255 editable
+  bytes, caret and NUL. Prompt/input/caret use the same LVGL label.
 - `apps/shell/maia-shell-parse-tree-collector.hpp`: checkpoint restore handles
   rollback; abort is a no-op after the generated rule's own restore. Resource
   exhaustion stays sticky. No duplicated lexical NAME rules.
@@ -57,11 +58,26 @@ legacy root-level generated comparison files were preserved.
 | `npm run test:shell-lvgl` |Same guest checks with actual LVGL-WASM; 1,253 valid RGB565 flushes; 1,000 parses; stack stable and 18 memory pages unchanged. |
 | `npm run test:lvgl-host` |Existing kernel, Calculator and Clock event/VFS/real-LVGL regression passes. |
 
-Final guest: 1,182,597 bytes; SHA-256:
+Original integration guest: 1,182,597 bytes; SHA-256:
 `0519cc85a3da21fd8f57b110a150bcc2ec3a7c9be8a785d197788842997d84a0`.
 Repeated builds produce identical WASM, including the optional C89 checker.
 Guest memory is 18 pages (1,179,648 bytes), below its existing 32-page manifest.
 This measurement covers the bounded guest, not the complete device/VM budget.
+
+### Inline prompt follow-up
+
+The live `maia> ` prompt now shares the input LVGL label with the editable text
+and caret, instead of ending the separate history label. Submitted prompts and
+commands move into history on Enter. The display buffer accommodates the six
+prompt bytes in addition to the unchanged 255-byte input, caret and NUL.
+
+`npm run build:shell -- --check-c89`, `npm run test:shell-host` and
+`npm run test:shell-lvgl` PASS after this change, including prompt/caret adjacency,
+editing/history, 255-byte input, all existing command/error cases, 1000 repeated
+parses, restored stack and stable 18 pages. Actual LVGL produced 1269 flushes.
+Current guest: 1,182,705 bytes; SHA-256
+`8aff50c34d878b3f7dbf6deaad480d6fb71b0290051fdfbfb630014fc4b70e67`.
+Refresh the simulator and relaunch the shell to load the updated module.
 
 ## LVGL scheduling observation
 

@@ -108,19 +108,20 @@ function submitText(text) {
   pressKey(MAIA_KEY_ENTER);
 }
 
-assert.match(labels.get(outputHandle), /MaiaOS Shell MVP.*maia> /s);
-assert.equal(labels.get(inputHandle), "|");
+assert.equal(labels.get(inputHandle), "maia> |", "Prompt and caret share one LVGL label");
+assert.equal(labels.get(outputHandle), "MaiaOS Shell MVP. Type help to begin.\n");
 submitText("help");
 typeText("echo helo");
 pressKey(MAIA_KEY_LEFT);
 pressKey(MAIA_KEY_TEXT, "l".charCodeAt(0));
+assert.equal(labels.get(inputHandle), "maia> echo hell|o");
 pressKey(MAIA_KEY_RIGHT);
 pressKey(MAIA_KEY_ENTER);
 submitText("pwd");
 pressKey(MAIA_KEY_UP);
-assert.equal(labels.get(inputHandle), "pwd|");
+assert.equal(labels.get(inputHandle), "maia> pwd|");
 pressKey(MAIA_KEY_DOWN);
-assert.equal(labels.get(inputHandle), "|");
+assert.equal(labels.get(inputHandle), "maia> |");
 submitText("cat /system/welcome.txt");
 const longEcho = `${"A".repeat(70)} ${"B".repeat(70)}`;
 submitText(`echo ${longEcho}`);
@@ -129,7 +130,7 @@ assert.match(priorOutput, /Commands: help, echo, pwd, cat \/system\/welcome\.txt
 assert.match(priorOutput, /echo hello\nhello/);
 assert.match(priorOutput, /pwd\n\/\n/);
 assert.match(priorOutput, /C\+\+ kernel read this text through maia\.vfs/);
-assert.ok(priorOutput.includes(`echo ${longEcho}\n${longEcho}\nmaia> `), priorOutput);
+assert.ok(priorOutput.includes(`echo ${longEcho}\n${longEcho}\n`), priorOutput);
 // These commands enter as keyboard bytes and are lexed/parsed inside the guest.
 // Exact output checks prevent the echoed input from masquerading as execution.
 const initialPages = guest.exports.memory.buffer.byteLength / 65536;
@@ -162,20 +163,23 @@ const commandCases = [
 for (const [source, expected] of commandCases) {
   submitText("clear");
   submitText(source);
-  assert.equal(labels.get(outputHandle), `maia> ${source}\n${expected}maia> `, source);
+  assert.equal(labels.get(outputHandle), `maia> ${source}\n${expected}`, source);
+  assert.equal(labels.get(inputHandle), "maia> |", source);
   assert.equal(guest.exports.__stack_ptr.value, stackBefore, source);
 }
 submitText("clear");
 typeText("x".repeat(260));
-assert.equal(labels.get(inputHandle), "x".repeat(255) + "|");
+assert.equal(labels.get(inputHandle), "maia> " + "x".repeat(255) + "|");
 pressKey(MAIA_KEY_ENTER);
-assert.match(labels.get(outputHandle), /shell input limit exceeded\nmaia> $/);
+assert.match(labels.get(outputHandle), /shell input limit exceeded\n$/);
+assert.equal(labels.get(inputHandle), "maia> |");
 for (let iteration = 0; iteration < 1000; ++iteration) submitText('echo "reuse"');
 assert.equal(guest.exports.__stack_ptr.value, stackBefore, "Repeated parsing restores frames");
 assert.equal(guest.exports.memory.buffer.byteLength / 65536, initialPages,
   "Repeated generated lexing reuses guest allocations");
 submitText("clear");
-assert.equal(labels.get(outputHandle), "maia> ");
+assert.equal(labels.get(outputHandle), "");
+assert.equal(labels.get(inputHandle), "maia> |");
 submitText("exit");
 
 const output = labels.get(outputHandle);

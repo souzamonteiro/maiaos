@@ -109,7 +109,9 @@ Limits remain explicit: 255 editable ASCII bytes, 32 lexer tokens including EOF,
 12 command words, 95 decoded bytes per word, 1024 tree nodes and a 4096-byte
 terminal buffer. These are bounded MVP resources, not a full POSIX shell.
 Errors distinguish malformed syntax, unimplemented execution and capacity.
-The 257-byte input-display buffer includes the cursor and terminating NUL.
+The 263-byte input-display buffer includes the six-byte prompt, 255 editable
+bytes, the cursor and terminating NUL. Prompt, input and caret share one LVGL
+label; submitted prompts/commands move into the separate history label.
 
 C++ libc/Regex allocations run in the guest. Host `env` bindings implement only
 memory size/grow and forward allocator bridges to guest malloc/free when linked;

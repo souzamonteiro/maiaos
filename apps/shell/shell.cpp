@@ -40,7 +40,7 @@ static const unsigned int kMaxTokens = 32;
 static const unsigned int kMaxWordBytes = 96;
 static const unsigned int kMaxArgs = 12;
 static const unsigned int kReadBufferBytes = 128;
-static const unsigned int kOutputBufferBytes = 257;
+static const unsigned int kOutputBufferBytes = 263;
 static const unsigned int kEventPacketBytes = 24;
 static const unsigned int kEventVersion = 1;
 static const unsigned int kEventGfxClicked = 1;
@@ -62,7 +62,7 @@ static MaiaCCParserToken gTokens[32];
 static MaiaShellParseTreeNode gParseNodes[1024];
 static char gCommandWords[1152];
 static uint8_t gReadBuffer[128];
-static char gOutputBuffer[257];
+static char gOutputBuffer[263];
 static char gTerminalText[4096];
 static uint8_t gEventPacket[24];
 static unsigned int gTokenCount = 0;
@@ -77,6 +77,7 @@ static int gExited = 0;
 static char gPreviousLine[256];
 static const char kWindowTitle[] = "Maia Shell";
 static const char kStartupText[] = "MaiaOS Shell MVP. Type help to begin.\n";
+static const char kPromptText[] = "maia> ";
 static const char kEmptyText[] = "";
 
 static char charAt(const char* text, unsigned int index)
@@ -140,11 +141,6 @@ static void clearTerminal(void)
     }
 }
 
-static void writePrompt(void)
-{
-    writeText(1, "maia> ");
-}
-
 static void renderInputLine(void)
 {
     unsigned int displayLength;
@@ -155,6 +151,10 @@ static void renderInputLine(void)
     displayLength = 0;
     lineBuffer = gLine;
     outputBuffer = gOutputBuffer;
+    for (index = 0; index < sizeof(kPromptText) - 1; ++index) {
+        putChar(outputBuffer, displayLength, charAt(kPromptText, index));
+        ++displayLength;
+    }
     for (index = 0; index <= gLineLength; ++index) {
         if (index == gCursor) value = '|';
         else if (index < gCursor) value = charAt(lineBuffer, index);
@@ -343,16 +343,15 @@ static void processLine(void)
         if (parsed == 0) writeText(2, "syntax error\n");
         else if (parsed == 3) writeText(2, "shell input limit exceeded\n");
         else writeText(2, "unsupported syntax: simple commands only\n");
-        writePrompt();
         return;
     }
     if (wordCount > 0) executeCommand(wordCount);
-    if (!gExited) writePrompt();
 }
 
 static void submitLine(void)
 {
     putChar(gLine, gLineLength, 0);
+    writeText(1, kPromptText);
     writeBytes(1, gLine, gLineLength);
     writeText(1, "\n");
     if (gLineLength > 0) {
@@ -444,7 +443,6 @@ extern "C" __attribute__((visibility("default"))) void maia_app_start(void)
         0);
     if (gOutputLabelHandle < 0 || gInputLabelHandle < 0) return;
     writeText(1, kStartupText);
-    writePrompt();
     renderInputLine();
 }
 
