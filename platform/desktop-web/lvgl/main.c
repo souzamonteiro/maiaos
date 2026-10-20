@@ -13,6 +13,8 @@
 static uint8_t draw_buffer[MAIAOS_WIDTH * MAIAOS_BUFFER_ROWS * 2];
 static lv_obj_t *objects[MAIAOS_OBJECT_LIMIT];
 static uint8_t object_kinds[MAIAOS_OBJECT_LIMIT];
+static int32_t label_parent_handle[MAIAOS_OBJECT_LIMIT];
+static lv_coord_t label_start_y[MAIAOS_OBJECT_LIMIT];
 static lv_coord_t next_label_y[MAIAOS_OBJECT_LIMIT];
 static uint8_t button_count[MAIAOS_OBJECT_LIMIT];
 static int32_t pointer_x;
@@ -159,6 +161,8 @@ void EMSCRIPTEN_KEEPALIVE maiaos_lvgl_reset(void)
   lv_obj_clean(lv_screen_active());
   memset(objects, 0, sizeof(objects));
   memset(object_kinds, 0, sizeof(object_kinds));
+  memset(label_parent_handle, 0, sizeof(label_parent_handle));
+  memset(label_start_y, 0, sizeof(label_start_y));
   memset(next_label_y, 0, sizeof(next_label_y));
   memset(button_count, 0, sizeof(button_count));
   next_handle = 1;
@@ -184,8 +188,38 @@ int32_t EMSCRIPTEN_KEEPALIVE maiaos_lvgl_window_create(int32_t pointer, int32_t 
   free(title_text);
 
   int32_t handle = store_object(window, OBJECT_WINDOW);
-  if (handle > 0) next_label_y[handle] = 86;
+  if (handle > 0) {
+    next_label_y[handle] = 86;
+    label_start_y[handle] = 86;
+    lv_obj_add_flag(window, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(window, LV_SCROLLBAR_MODE_AUTO);
+  }
   return handle;
+}
+
+static void relayout_labels(int32_t parent_handle)
+{
+  lv_obj_t *parent = get_object(parent_handle);
+  if (parent == NULL) return;
+
+  lv_coord_t y = label_start_y[parent_handle];
+  int32_t width = lv_obj_get_content_width(parent) - 48;
+  if (width < 1) width = 1;
+  lv_obj_t *last_label = NULL;
+  for (int32_t handle = 1; handle < (int32_t)next_handle; handle++) {
+    if (object_kinds[handle] != OBJECT_LABEL
+        || label_parent_handle[handle] != parent_handle) continue;
+    lv_obj_t *label = objects[handle];
+    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(label, width);
+    lv_obj_update_layout(label);
+    lv_obj_set_pos(label, 24, y);
+    lv_obj_update_layout(label);
+    y += lv_obj_get_height(label) + 10;
+    last_label = label;
+  }
+  next_label_y[parent_handle] = y;
+  if (last_label != NULL) lv_obj_scroll_to_view(last_label, LV_ANIM_OFF);
 }
 
 int32_t EMSCRIPTEN_KEEPALIVE maiaos_lvgl_label_create(int32_t parent_handle, int32_t pointer, int32_t length)
@@ -200,10 +234,12 @@ int32_t EMSCRIPTEN_KEEPALIVE maiaos_lvgl_label_create(int32_t parent_handle, int
   lv_obj_t *label = lv_label_create(parent);
   lv_label_set_text(label, text);
   lv_obj_set_style_text_color(label, lv_color_hex(0xe8f2ef), LV_PART_MAIN);
-  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, next_label_y[parent_handle]);
-  next_label_y[parent_handle] += 38;
   free(text);
-  return store_object(label, OBJECT_LABEL);
+  int32_t handle = store_object(label, OBJECT_LABEL);
+  if (handle <= 0) return handle;
+  label_parent_handle[handle] = parent_handle;
+  relayout_labels(parent_handle);
+  return handle;
 }
 
 int32_t EMSCRIPTEN_KEEPALIVE maiaos_lvgl_label_set_text(int32_t handle, int32_t pointer, int32_t length)
@@ -215,6 +251,7 @@ int32_t EMSCRIPTEN_KEEPALIVE maiaos_lvgl_label_set_text(int32_t handle, int32_t 
   lv_label_set_text(label, text);
   lv_obj_set_style_text_color(label, lv_color_hex(0xe8f2ef), LV_PART_MAIN);
   free(text);
+  relayout_labels(label_parent_handle[handle]);
   return 0;
 }
 

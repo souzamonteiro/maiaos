@@ -9,6 +9,17 @@ const EVENT_PACKET_VERSION = 1;
 const EVENT_PACKET_BYTES = 24;
 const EVENT_QUEUE_CAPACITY = 64;
 export const MAIA_EVENT_GFX_CLICKED = 1;
+export const MAIA_EVENT_KEY = 2;
+export const MAIA_KEY_TEXT = 0;
+export const MAIA_KEY_ENTER = 1;
+export const MAIA_KEY_BACKSPACE = 2;
+export const MAIA_KEY_LEFT = 3;
+export const MAIA_KEY_RIGHT = 4;
+export const MAIA_KEY_HOME = 5;
+export const MAIA_KEY_END = 6;
+export const MAIA_KEY_DELETE = 7;
+export const MAIA_KEY_UP = 8;
+export const MAIA_KEY_DOWN = 9;
 
 function validateGuestRange(memory, pointer, length) {
   if (
@@ -31,9 +42,15 @@ function validateGuestRange(memory, pointer, length) {
 
 function readGuestText(memory, pointer, length) {
   validateGuestRange(memory, pointer, length);
-  return new TextDecoder("utf-8", { fatal: true }).decode(
-    new Uint8Array(memory.buffer, pointer, length),
-  );
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      new Uint8Array(memory.buffer, pointer, length),
+    );
+  } catch {
+    throw new TypeError(
+      `Guest text at ${pointer} (${length} bytes) is not valid UTF-8`,
+    );
+  }
 }
 
 export function createMaiaHostImports({
@@ -76,6 +93,9 @@ export function createMaiaHostImports({
   const allocate = (size) => {
     if (!guestMemory || !Number.isFinite(Number(size))) return 0;
     const requested = Math.max(1, Number(size) >>> 0);
+    if (typeof guestInstance?.exports?.malloc === "function") {
+      return guestInstance.exports.malloc(requested);
+    }
     const alignDown = (value) => Math.floor(value / 8) * 8;
     if (heapTop === null) heapTop = guestMemory.buffer.byteLength;
 
@@ -102,7 +122,16 @@ export function createMaiaHostImports({
   const imports = {
     env: {
       __malloc: allocate,
-      __free: () => {},
+      __free: (pointer) => {
+        if (typeof guestInstance?.exports?.free === "function") guestInstance.exports.free(pointer);
+      },
+      // MaiaC libc manages guest allocations; the host supplies WASM primitives.
+      __builtin_wasm_memory_size: (index) =>
+        index === 0 && guestMemory ? guestMemory.buffer.byteLength / 65536 : -1,
+      __builtin_wasm_memory_grow: (index, pages) => {
+        if (index !== 0 || !guestMemory || !Number.isInteger(pages) || pages < 0) return -1;
+        try { return guestMemory.grow(pages); } catch { return -1; }
+      },
     },
     "maia.gfx": {
       window_create: (pointer, length) =>

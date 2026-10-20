@@ -11,6 +11,11 @@
     "build:shell": "bash scripts/build-shell-wasm.sh",
     "build:lvgl": "bash scripts/build-lvgl-wasm.sh",
     "test:shell-grammar": "bash scripts/test-shell-grammar.sh",
+    "test:shell-parser": "node scripts/test-shell-generated-parser.mjs",
+    "test:shell-equivalence": "node scripts/test-shell-equivalence.mjs",
+    "benchmark:shell-parser": "node scripts/benchmark-shell-frontends.mjs",
+    "test:shell-host": "node scripts/test-shell-host.mjs",
+    "test:shell-lvgl": "node scripts/test-shell-host.mjs --lvgl",
     "test:lvgl-host": "node scripts/test-lvgl-host.mjs",
     "demo": "node platform/desktop-web/server.js"
   }

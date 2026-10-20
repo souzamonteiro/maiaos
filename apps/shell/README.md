@@ -1,6 +1,6 @@
 # MaiaOS Shell — implementation blueprint
 
-**Status:** structural phase-one grammar validated with the MaiaCC JavaScript generator and collector against representative fixtures. It is not POSIX-conformant and is not a working shell. The reference for comparison is POSIX.1-2017, Shell Grammar, sections 2.10.1 and 2.10.2.
+**Status:** bounded MVP with MaiaCC-generated C++98 lexing/parsing integrated in the WASM guest. The app guest supports `help`, `echo`, `pwd`, `cat /system/welcome.txt`, `clear`, and `exit`; it is not POSIX-conformant. The reference for comparison is POSIX.1-2017, Shell Grammar, sections 2.10.1 and 2.10.2.
 
 ## Architecture
 
@@ -14,63 +14,160 @@ flowchart TD
  I <--> H
  S <--> H
  D <--> H
- H <--> J[io.js - browser adapters]
+ H <--> J[LVGL JS adapter + keyboard events]
  H <--> V[vfs.js - IndexedDB/OPFS]
- J <--> T[Terminal DOM / xterm.js]
+ J <--> T[LVGL guest windows]
 ```
 
 The browser is the real host. Separate WASM modules do not magically share memory or link symbols. Implement a **versioned C ABI** through JS import/export dispatch and copy buffers across separate linear memories. A single shared-memory design is a separate, advanced option requiring compatible toolchains and browser isolation.
 
-The diagram is the target module decomposition. The current browser coordinator is `platform/desktop-web/main.js`; there is no separate `bootloader.js`, and only the kernel, Calculator and Clock guests currently have buildable WASM sources. `io.wasm`, `shell.wasm` and `desktop.wasm` remain planned artifacts. Every C++98 guest is intended to use MaiaCpp AST-strict -> C89 -> MaiaC -> WASM; the LVGL-WASM browser platform module is the only current Emscripten-built module.
+The diagram is the target module decomposition. The browser coordinator is `platform/desktop-web/main.js`; there is no separate `bootloader.js`. The kernel, Calculator, Clock, and Shell guests have buildable WASM artifacts. `io.wasm` and `desktop.wasm` remain future work. The Shell guest is C++98 compiled by MaiaCpp AST-strict -> C89 -> MaiaC -> WASM, then creates its terminal window and labels through LVGL imports. The browser host forwards keyboard events into the guest event queue; it does not render a separate shell DOM panel.
 
 ## MaiaCC parser generation
 
-The shell grammar source is `apps/shell/maia-shell.ebnf`. Parser generation is owned by the in-repository MaiaCC toolchain (`maiacpp/maiacc`); REx is an internal stage of MaiaCC's EBNF pipeline, not a separate compiler dependency for MaiaOS. The current test runner generates a temporary JavaScript parser and parse-tree collector to validate grammar fixtures. It does not produce `shell.wasm` or implement command execution.
+The shell grammar source is `apps/shell/maia-shell.ebnf`. Parser generation is owned by the in-repository MaiaCC toolchain (`maiacpp/maiacc`); REx is an internal stage of MaiaCC's EBNF pipeline, not a separate compiler dependency for MaiaOS. The build generates a C++98 lexer/parser header and links it into `shell.wasm` with the repository-local MaiaRegex instruction runtime and MaiaC libc. JavaScript parser generation supplies independent test oracles.
 
 1. Edit only `apps/shell/maia-shell.ebnf` for grammar changes; never hand-edit generated parsers.
 2. Use the MaiaCC parser generator from the recursive submodule and regenerate the target parser from EBNF.
 3. Run the shell grammar fixtures and validate lexer/parser token and source-offset agreement.
-4. Keep the temporary JavaScript parser used by this test harness distinct from the future shell runtime parser/guest.
-5. When shell execution is implemented, compile the C++98 guest through MaiaCpp AST-strict -> C89 -> MaiaC -> WASM; do not use Emscripten for `shell.wasm`.
+4. Treat the generated JavaScript parser as a grammar-test oracle; the runtime guest calls the generated `maiaCCLexerTokenize` and `maiaCC_parse` on raw input. The collector contains no replacement lexical rules.
+5. Compile the runtime guest through MaiaCpp AST-strict -> C89 -> MaiaC -> WASM; do not use Emscripten for `shell.wasm`.
 
 **Important:** the grammar is only a structural subset. It covers basic simple commands, assignments, file redirections, pipelines, AND/OR lists, subshells, brace groups, `if`, `while`, `until`, and `for`. It does not yet cover `case`, function definitions, here-document bodies, or POSIX word expansion. Its quoted-word lexer is deliberately limited. It also treats reserved words globally and recognizes digit-only tokens as `IO_NUMBER` without checking that they are adjacent to `<` or `>`; POSIX 2.10 requires parser-context classification for reserved words, `NAME`, `ASSIGNMENT_WORD`, and `IO_NUMBER`. These cases require a stateful/context-aware scanner or parser integration, not a change to the grammar productions alone. No POSIX-conformance claim should be made until those rules are implemented and differentially tested.
 
-The current grammar was generated to a temporary JavaScript parser with MaiaCC and exercised through `ParseTreeCollector`. Valid fixtures covered simple commands, assignments, redirections, pipelines, AND/OR lists, comments, quoting, compound groups and loops. Invalid fixtures covered repeated separators and adjacent pipeline operators. This verifies generation and the declared subset only; it does not replace the POSIX lexical-convention rules.
+The current grammar is exercised through `ParseTreeCollector` fixtures. Valid fixtures cover simple commands, assignments, redirections, pipelines, AND/OR lists, comments, quoting, compound groups and loops. Invalid fixtures cover repeated separators and adjacent pipeline operators. This verifies generation and the declared subset only; it does not replace the POSIX lexical-convention rules.
 
-The test runner reads this exact `maia-shell.ebnf` file and regenerates the temporary JavaScript parser on every run. This is the active grammar source. MaiaCC also emits a C++98 parser from it; the generated C++98 source passed `clang++ -std=c++98 -fsyntax-only`, then MaiaCpp AST-strict -> MaiaC -> WASM. The generated WASM exports the parser routines, but the parser consumes tokens supplied by its caller: a runtime lexer, token feeding, parse-tree/AST handling, and command executor still need integration. Do not change the EBNF merely to match an unimplemented executor.
+The test runner reads this exact `maia-shell.ebnf` file and regenerates a temporary JavaScript parser on every run. This validates the declared grammar subset only. The runtime guest embeds the generated C++98 lexer/parser. Its bounded tree adapter and simple-command dispatcher are separate from generated syntax. MaiaCC grammar coverage is not a claim that compound commands, assignments or redirections execute.
 
-## Fast usable MVP recommendation
+## Current MVP behavior
 
-Do **not** make a separate `io.wasm` a prerequisite for the first shell. The current browser host already instantiates app guests, schedules their step exports, routes events, enforces manifest capabilities, and provides `maia.vfs.open/read/write/close`. Add a small nonblocking TTY service to that host and launch the shell as a normal app guest beside the kernel. Keep `io.wasm` as a later service split after its contract and IPC are proven.
+The Shell is launched as a normal app guest from the browser app catalog. The browser host instantiates guests, schedules their step exports, enforces manifest capabilities, provides the VFS and LVGL callbacks, and forwards keyboard events to the focused shell guest. The prompt, output, editable line, and caret are LVGL labels created by the guest. There is no HTML input or Send button for shell commands. A separate `io.wasm` is not required for this slice.
 
-The first TTY contract should be deliberately small and nonblocking, for example:
+The guest uses these imported system calls:
 
 | Import | MVP behavior |
 |---|---|
-| `maia.tty.poll_line(out_ptr, capacity) -> i32` | Return queued UTF-8 bytes, `-6` when no complete line is ready, or a negative status on error. The browser queues lines submitted from a terminal input control. |
-| `maia.tty.write(stream, ptr, len) -> i32` | Copy UTF-8 output to the terminal view; `stream` distinguishes stdout and stderr. |
+| `maia.gfx.window_create(title_ptr, title_len)` | Create the shell's LVGL window. |
+| `maia.gfx.label_create(parent, text_ptr, text_len)` | Create output and command-line labels inside that window. |
+| `maia.gfx.label_set_text(label, text_ptr, text_len)` | Draw guest-generated prompt, output, and caret text. |
+| `maia.events.poll(packet_ptr, capacity)` | Read versioned events. The host sends keyboard packets with printable ASCII in `data0` and the key identifier in `data1`: Enter, arrows, Home/End, Backspace, Delete, and Up/Down. |
+| `maia.vfs.open/read/close` | Read `/system/welcome.txt` for `cat`. |
+| `maia.process.exit(status)` | Exit the shell guest cleanly. |
 
-This is a proposal, not part of ABI v0. Before implementation, add both imports to the capability map, host policy, manifest, bounds checks, and host tests. The guest must return from every `shell_step` when no input is available; it must never block the browser event loop. `maia.log.write` remains diagnostics, not user-facing shell output.
+The host forwards keys only while the LVGL screen has focus. The guest owns the editable line, cursor, and one-line history, and executes on Enter; it never blocks the browser event loop. The manifest's `tty.input` capability enables keyboard routing. There are no `maia.tty` imports or shell DOM controls. `maia.log.write` remains diagnostics, not user-facing shell output.
 
-Reuse the current VFS API for reading existing files. The current ABI does **not** provide directory enumeration, `mkdir`, `unlink`, `chdir`, pipes, process spawn, or terminal descriptors. Therefore the first command set should be limited to `help`, `echo`, shell-local `pwd`, `cat /system/welcome.txt`, and `exit`. Add `ls`, writable files, `cd`, redirection, and pipelines only with their required VFS/process contracts and tests. The commands in the future inventory below are not implemented by listing them here.
+Reuse the current VFS API for reading existing files. The current ABI does **not** provide directory enumeration, `mkdir`, `unlink`, `chdir`, pipes, process spawn, or terminal descriptors. The MVP command set is `help`, `echo`, shell-local `pwd`, `cat /system/welcome.txt`, `clear`, and `exit`. Add `ls`, writable files, `cd`, redirection, and pipelines only with their required VFS/process contracts and tests. The commands in the future inventory below are not implemented by listing them here.
 
-The first shell can use the existing app lifecycle (`maia_app_start` plus `maiaos_step`) and a new app manifest. Its parser should come from MaiaCC and its C++98 runtime should use MaiaCpp AST-strict -> C89 -> MaiaC -> WASM. The initial parser integration spike should compile the generated C++98 parser through MaiaCpp and run a parse fixture in WASM; successful MaiaCC generation alone is not enough evidence.
+The current shell uses the app lifecycle (`maia_app_start` plus `maiaos_step`), `apps/shell/manifest.json`, LVGL and event imports, and the MaiaCpp AST-strict -> C89 -> MaiaC -> WASM pipeline. The host smoke and browser test verify the five commands, key editing, LVGL output, VFS access, and exit.
 
-## Rough implementation cost
+## Status and next steps
 
-Estimates assume one engineer familiar with the Maia Suite, the current browser host, and a deliberately small browser-first MVP. They exclude hardware bring-up and full POSIX conformance.
+| Area | Status |
+|---|---|
+| MaiaCC grammar | Structural subset; generated C++98 lexer/parser embedded in the runtime guest and checked against the JS oracle. |
+| Browser app catalog and LVGL | Implemented; the guest draws its own window, prompt, output, editable line, and caret. |
+| Keyboard event syscalls | Implemented; printable keys, Enter, arrows, Home/End, Backspace, Delete, and one-line Up/Down history are handled by the C guest. |
+| Minimal command executor | Implemented and tested: `help`, `echo`, shell-local `pwd`, `cat /system/welcome.txt`, `clear`, and `exit`. |
+| Browser host smoke | Existing MVP had interactive verification. This integration is tested through Node and the real LVGL-WASM callbacks; browser interaction was not rerun because the integrated browser is unavailable. |
+| Directory and mutable filesystem commands | Not implemented. The VFS needs directory enumeration and working-directory semantics before `ls` or `cd`; writes need their own behavior and tests. |
+| Pipelines, redirection, expansions, jobs, and POSIX conformance | Future work; not required for this MVP. |
 
-| Stage | Scope | Rough effort |
-|---|---|---|
-| Parser integration spike | Add a runtime lexer/token feed and execute parse fixtures through the generated WASM parser. The generator and MaiaCpp/MaiaC compilation path have already been proven. | 1-2 days, depending on token API and lexer behavior. |
-| TTY host path | Terminal input/output UI, nonblocking line queue, `maia.tty` imports, capability mapping and browser/Node tests. | 1-2 days. |
-| Minimal shell guest | Manifest, app lifecycle, parser/AST command dispatcher and the five MVP commands above. | 2-4 days after the parser spike. |
-| File-system commands | Add `readdir`/directory operations, path working directory and tests before implementing `ls`, `mkdir`, `cd`, writes and redirection. | 2-5 additional days depending on the VFS contract. |
-| Separate `io.wasm`, pipes and POSIX expansion/jobs | Introduce service IPC, scheduling/backpressure, quoting/expansion, process lifecycle and broader conformance tests. | Several weeks; not an MVP prerequisite. |
+The current vertical slice is **kernel + LVGL host callbacks + shell app**. A separate `io.wasm`, HTML terminal panel, Send button, and the Espressif bootloader are not part of this MVP.
 
-The cheapest vertical slice is therefore **current kernel + host TTY service + shell app**, not kernel + `io.wasm` + shell + desktop. The browser host is already the boot/runtime coordinator for this slice. The Espressif bootloader remains unchanged; native MaiaOS firmware is a later target.
+## Integrated lexer/parser validation
+
+```sh
+npm run build:shell
+npm run build:shell -- --check-c89
+npm run test:shell-parser
+npm run test:shell-host
+npm run test:shell-lvgl
+npm test
+```
+
+The build uses only `maiacpp/maiacc`, `maiacpp/maiaregex` and `maiacpp/maiac`
+from this repository. `generated/maia-shell-parser.hpp` and its copied Regex
+header are reproducible build outputs. C++98 is lowered in AST-strict mode;
+MaiaC/MaiaWASM produce the guest. The optional `--check-c89` validation uses
+Clang's strict C89 checker with the wasm32 pointer ABI. Normal guest builds
+require only the Maia toolchain and Node; Clang never generates the guest.
+
+The raw-input suite regenerates both backends in temporary directories and
+compares 52 cases: lexing success/failure, token types/values/UTF-16 offsets and
+complete accepted trees. Native C++ receives raw input, not JS-produced tokens.
+It includes Unicode quotes, malformed quotes/escapes and collector exhaustion.
+The previous pre-tokenized parity runner below remains a separate check.
+
+Guest tests deliver keyboard events through `maia.events`, verify exact LVGL
+output, all six commands, quotes/comments, syntax errors, unsupported compound
+execution and capacity limits. One thousand repeated parses must restore their
+frames and reuse allocations without growing linear memory. `--lvgl` uses the
+actual platform LVGL module and requires valid RGB565 flushes; callback-only
+checks are also retained. Browser UI interaction is a separate unrun check.
+
+Limits remain explicit: 255 editable ASCII bytes, 32 lexer tokens including EOF,
+12 command words, 95 decoded bytes per word, 1024 tree nodes and a 4096-byte
+terminal buffer. These are bounded MVP resources, not a full POSIX shell.
+Errors distinguish malformed syntax, unimplemented execution and capacity.
+The 257-byte input-display buffer includes the cursor and terminating NUL.
+
+C++ libc/Regex allocations run in the guest. Host `env` bindings implement only
+memory size/grow and forward allocator bridges to guest malloc/free when linked;
+MaiaOS system calls and capability names remain unchanged. The existing LVGL configuration is preserved. The real-LVGL test advances
+its timer/render loop after guest events, matching the platform scheduler;
+starving that loop in a synthetic stress test exhausts temporary GUI resources.
+
+The grammar itself is unchanged by this integration. Known lexical gaps include
+reserved-word context and descriptor adjacency. Additional structural diagnoses
+include acceptance of `if true then echo yes; fi` and `for x in a do echo hi; done`
+without required separators; these are not POSIX conformance successes. The
+executor rejects such compound syntax as unsupported. Shell expansion and
+multiline editing/execution remain future work.
 
 ## Parser test runner
+
+The current manifest loads `shell.wasm`. The retained `shell.js` is a legacy
+wrapper artifact, not the current guest entry or the generated JS parser oracle.
+`maia-shell.js`, `maia-shell.cpp` and `maia-shell.xml` are comparison artifacts
+regenerated by `node apps/shell/rtest.js --cpp`; the runtime build separately
+generates `generated/maia-shell-parser.hpp` from the same EBNF.
+
+For deterministic differential testing of the generated lexer/parser on raw
+UTF-8 inputs, run `npm run test:shell-equivalence`. It regenerates both backends
+from this EBNF, evaluates JavaScript, compiles the C++98 adapter natively, then
+compiles a test-only C++98 adapter through MaiaCpp -> C89 -> MaiaC/MaiaWASM.
+The same raw bytes reach each generated lexer. Comparisons include complete
+token streams and UTF-16 offsets, lexical failure positions and partial token
+streams, syntax acceptance, and complete accepted tree hierarchy/terminal values.
+
+The deterministic corpus includes existing fixtures, ASCII/control characters,
+Unicode boundaries, fragment pairs, seeded mutations, structured commands,
+long words, incomplete inputs and nesting through 128 subshells. Seed:
+`0x4d414941`. Test-only WASM buffers (4096 input bytes, 2048 tokens, 8192 nodes)
+allow comparison beyond the interactive shell's 255-byte/32-token budget;
+production limits are unchanged. Matching, parsing, Regex and allocation execute
+inside the WASM test module. Its host imports supply existing libc memory
+primitives only; graphics callbacks fail if unexpectedly invoked. This test
+does not claim GUI, execution, device/VM or full POSIX conformance.
+
+`MAIA_SHELL_KEEP_BUILD=1 npm run test:shell-equivalence` retains generated
+sources, native binary, WASM and `report.json` in the printed temporary directory.
+Failure artifacts are always retained. A finite matching corpus is evidence of
+equivalence on those inputs, not a proof for every input or resource limit.
+
+Parsers in this project must be generated automatically from EBNF exclusively with MaiaCC/tREx. Do not implement syntax rules in handwritten replacement parsers or edit generated files manually.
+
+The isolated cross-language suite uses the local `maia-shell.js` and `parse-tree-collector.js`. Run from the repository root:
+
+```sh
+node apps/shell/rtest.js
+node apps/shell/rtest.js --cpp
+node apps/shell/rtest.js --cpp --print-trees
+```
+
+Each run regenerates `maia-shell.js` and `maia-shell.xml` from the EBNF with the in-repository MaiaCC/tREx. It checks 44 valid/invalid cases, including physical scripts in `tests/fixtures`, expected productions, token leaves, and source offsets. `--print-trees` displays collected JavaScript trees.
+
+Only after all JavaScript checks pass, `--cpp` generates `maia-shell.cpp` using `--language cpp98`, compiles `test.cpp` with `clang++ -std=c++98`, and tests the same token streams with `maia-shell-parse-tree-collector.hpp`. Every accepted C++ tree must match the JavaScript tree in full (hierarchy, rules, terminal types, and values). Temporary binaries are removed after testing. This verifies native C++ parser/collector parity, not a generated C++ lexer, the WASM build, or execution of these scripts by the shell. The C++ driver receives tokens from the MaiaCC-generated JavaScript lexer; it does not parse shell syntax itself. Existing POSIX lexical gaps remain and are reported by the separate suite below.
 
 The runner regenerates the JS parser into the OS temporary directory, parses the scenario corpus, checks expected production rules, and compares every parse-tree terminal with the lexer's token stream and source offsets. Generated parser files are removed when the run ends.
 
@@ -92,11 +189,11 @@ The default run reports known POSIX lexical gaps separately. Add `--strict-posix
 
 ## Parsing semantics
 
-Long-term stages are: browser input -> incremental lexer -> MaiaCC-generated parser -> AST -> expansions -> executor -> MaiaOS ABI. The MVP only needs simple command words, quoting supported by the current grammar, and command dispatch. Defer heredocs, POSIX-context-sensitive reserved words, full assignment semantics, expansions, shell functions, `trap`, and job control. `cd`, `export`, `unset`, `set`, `read`, `shift`, and `umask` require persistent shell state and are not part of the first command slice.
+The current path is: keyboard -> host event packet -> C++98 line editor -> MaiaCC-generated lexer/parser -> bounded parse-tree validation and word evaluation -> simple-command dispatch -> LVGL/VFS/process imports. The MVP handles command words with basic quotes and escapes. Defer heredocs, POSIX-context-sensitive reserved words, full assignment semantics, expansions, shell functions, `trap`, and job control. `cd`, `export`, `unset`, `set`, `read`, `shift`, and `umask` require persistent shell state and are not part of this command slice.
 
-## Future terminal and asynchronous stdin design
+## Terminal and asynchronous stdin roadmap
 
-For the MVP, use a simple DOM terminal/input control owned by the browser platform host. Keyboard submission queues a UTF-8 line for `maia.tty.poll_line`; output is copied through `maia.tty.write`. This avoids asyncify/JSPI and does not require a Worker or `io.wasm`.
+The browser host translates keydown events into `maia.events` packets only while the LVGL display canvas has focus. The C guest edits and renders the line inside its LVGL window; Enter sends it to the command executor. This avoids DOM terminal controls, asyncify/JSPI, a Worker, and `io.wasm`.
 
 Later, `io.wasm` may own canonical editing, echo, line discipline, and fd 0/1/2. If introduced, it needs an explicit asynchronous ABI and a process/IPC design. **Do not synchronously block the browser main thread.** A coroutine/state-machine API or Worker may be evaluated after the simple host TTY is usable.
 
@@ -104,39 +201,34 @@ Later, `io.wasm` may own canonical editing, echo, line discipline, and fd 0/1/2.
 
 `maia_open(path, flags, mode) -> fd`; `maia_close(fd)`; `maia_read(fd, ptr, len) -> ssize_t/pending`; `maia_write(fd, ptr, len)`; `maia_seek(fd, off, whence)`; `maia_stat(path, out)`; `maia_readdir(fd, out)`; `maia_mkdir(path, mode)`; `maia_unlink(path)`; `maia_rename(old,new)`; `maia_chdir(path)`; `maia_getcwd(out,len)`; `maia_clock_gettime(...)`; `maia_spawn(...)`; `maia_wait(...)`; `maia_pipe(...)`; `maia_dup2(...)`; `maia_tty_ioctl(...)`.
 
-This broad POSIX-like proposal is **not** the ABI to implement for the MVP. It overlaps the existing `maia.vfs` imports and includes unsupported process, pipe, directory, and terminal calls. Prefer the existing VFS signatures plus only the two narrow `maia.tty` calls above. Revisit this broader interface only when there is a real consumer for the additional operations.
+This broad POSIX-like proposal is **not** the ABI to implement for the MVP. It overlaps the existing `maia.vfs` imports and includes unsupported process, pipe, directory, and terminal calls. Reuse the existing VFS signatures and the LVGL/event imports listed above. Revisit this broader interface only when there is a real consumer for the additional operations.
 
-## Virtual filesystem
+## Virtual filesystem limits
 
-Mount `/` (root), `/bin` (commands), `/home/guest`, `/tmp`, `/dev` (tty/null/zero), `/proc` (synthetic, optional). `vfs.js` maintains inodes, directories, metadata, symlinks (phase 2), file handles and mounts. Start with memory backend, add OPFS/IndexedDB persistence and transactional error handling. Never treat browser storage as a real host POSIX filesystem. `cwd` is per-process; `cd` does not change the browser URL.
+The shell currently reads the seeded `/system/welcome.txt` through the existing VFS API. The ABI does not expose directory enumeration, `mkdir`, `unlink`, or `chdir`, so `ls`, `cd`, and mutable filesystem workflows are outside the MVP. Browser storage is not a host POSIX filesystem; future `cwd` must remain per-process and must not change the browser URL.
 
-## Future command inventory (not implemented)
+## Future command inventory
 
-The phase labels below are prioritization only; none of these commands is implemented by the grammar test. The first MVP command subset is listed above.
+The grammar test validates parsing only. The implemented MVP commands are listed above; the utilities and builtins below are targets, not implemented features.
 
-**Future shell builtins:** `:`, `.`, `alias`, `bg`, `break`, `cd`, `command`, `continue`, `echo`, `eval`, `exec`, `exit`, `export`, `false`, `fg`, `getopts`, `hash`, `jobs`, `kill`, `pwd`, `read`, `readonly`, `return`, `set`, `shift`, `test`, `[`, `times`, `trap`, `true`, `type`, `ulimit`, `umask`, `unalias`, `unset`, `wait`.
+**Future shell builtins:** `:`, `.`, `alias`, `bg`, `break`, `cd`, `command`, `continue`, `eval`, `exec`, `export`, `false`, `fg`, `getopts`, `hash`, `jobs`, `kill`, `read`, `readonly`, `return`, `set`, `shift`, `test`, `[`, `times`, `trap`, `true`, `type`, `ulimit`, `umask`, `unalias`, `unset`, `wait`.
 
-**Core utilities, phase 1:** `basename`, `cat`, `clear`, `cmp`, `cp`, `cut`, `date`, `dirname`, `env`, `expr`, `find`, `grep`, `head`, `id`, `ln`, `ls`, `mkdir`, `mktemp`, `mv`, `printf`, `rm`, `rmdir`, `sed`, `seq`, `sleep`, `sort`, `stat`, `tail`, `tee`, `touch`, `tr`, `uname`, `uniq`, `wc`, `which`, `xargs`, `yes`.
+**Core utilities, phase 1:** `basename`, `clear`, `cmp`, `cp`, `cut`, `date`, `dirname`, `env`, `expr`, `find`, `grep`, `head`, `id`, `ln`, `ls`, `mkdir`, `mktemp`, `mv`, `printf`, `rm`, `rmdir`, `sed`, `seq`, `sleep`, `sort`, `stat`, `tail`, `tee`, `touch`, `tr`, `uname`, `uniq`, `wc`, `which`, `xargs`, `yes`.
 
 **Phase 2 (depending on kernel support):** `awk`, `chmod`, `chown`, `dd`, `df`, `du`, `file`, `gzip`, `gunzip`, `less`, `more`, `od`, `paste`, `ps`, `tar`, `time`, `timeout`, `top`, `tty`, `vi`.
 
 **Not promised:** real OS processes, native fork/exec, signals, networking, users/groups, device permissions or complete BusyBox behavior. These need explicit emulation or capability mapping. A command name in the inventory is a target, not an implemented feature.
 
-## Future implementation roadmap
+## Roadmap
 
-1. Boot: loader instantiates modules and checks ABI versions; terminal prints `MaiaOS>`.
-2. TTY: editable input line, stdout/stderr, Ctrl-C/Ctrl-D, multiline continuation.
-3. VFS: memory filesystem, fd table, `/home/guest`, basic read/write/list operations.
-4. Parser: validate grammar and generated C++; AST for words, simple commands, pipelines, redirections.
-5. Executor: `echo`, `pwd`, `cd`, `ls`, `cat`, `mkdir`, `touch`, `rm`, `exit`.
-6. Jobs: pipe buffers with backpressure; cooperative tasks and `wait`; no false claims of POSIX fork.
-7. Shell language: variables, quoting, expansion, if/for/while/functions, substitutions, heredocs.
-8. Persistence and GUI: OPFS/IndexedDB and optional `desktop.wasm` terminal window.
-9. POSIX conformance: build fixtures from the Open Group shell specification and differential-test against `dash`/BusyBox `ash` where semantics are comparable.
+1. **Done:** browser app launch, LVGL window, event-driven line editing with cursor/history, simple-command execution, and the six-command shell guest.
+2. **Next:** define directory enumeration and per-app working-directory behavior in the VFS; then add `ls` and `cd` with tests.
+3. **Later:** writable files, redirection, pipelines, expansion, and process/job semantics, each behind an explicit host contract.
+4. **Long term:** persistence improvements and differential tests for the POSIX shell features MaiaOS chooses to support.
 
-## Future shell acceptance criteria
+## Next acceptance criteria
 
-`echo hello`; `pwd`; `mkdir demo; cd demo; echo hi > a.txt; cat a.txt`; `echo abc | tr a-z A-Z`; `false || echo recovered`; `printf 'a\nb\n' | wc -l`; `read name` (type at terminal); multiline input; Ctrl-C; EOF; reload and recover persisted file. Verify exit codes, stderr, ordering, no UI freeze, no dropped bytes, no parser hang on malformed input, and ABI mismatch detection.
+Add VFS directory enumeration and a shell-local working directory, then verify `ls` and `cd` without changing the browser URL. Keep the existing smoke checks for command output, stderr, process exit, and nonblocking input; add pipeline and redirection criteria only after those host contracts exist.
 
 ## References
 

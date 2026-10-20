@@ -1,6 +1,8 @@
 const IMPORT_CAPABILITIES = Object.freeze({
   "env.__malloc": "memory.alloc",
   "env.__free": "memory.free",
+  "env.__builtin_wasm_memory_size": "memory.alloc",
+  "env.__builtin_wasm_memory_grow": "memory.alloc",
   "maia.gfx.window_create": "gfx.window",
   "maia.gfx.label_create": "gfx.label",
   "maia.gfx.label_set_text": "gfx.label.set_text",

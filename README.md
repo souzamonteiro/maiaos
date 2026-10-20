@@ -19,6 +19,7 @@ MaiaOS is designed to run on desktop hosts during development and on the M5Stack
 5. Treat WASM modules as untrusted; validate, bound memory and CPU use, and mediate host calls.
 6. Preserve ES8, C89, C++98 and WebAssembly 3.0 as suite targets, with an explicitly negotiated embedded feature profile.
 7. Develop the interpreter in JS and verify generated C89 against identical conformance tests.
+8. Generate every parser automatically from its EBNF using MaiaCC/tREx only. Never hand-write a replacement parser or manually edit generated parser code. Fix grammar or generator defects at their source; collectors and host adapters must not duplicate syntax rules.
 
 ## Guest artifacts and toolchain
 
@@ -28,7 +29,7 @@ The current system boot chain keeps the Espressif ROM and second-stage bootloade
 |---|---|---|
 | `kernel.wasm` | Implemented | C++98 kernel guest; current browser host starts it and schedules `maiaos_step`. |
 | `io.wasm` | Planned | I/O and TTY service boundary for guest input/output. |
-| `shell.wasm` | Planned | Command parser and shell execution; the EBNF parser tests are not a working shell. |
+| `shell.wasm` | Bounded MVP | Generated C++98 lexer/parser in the guest; six simple commands through LVGL/VFS/events. Compound execution and POSIX conformance remain future work. |
 | `desktop.wasm` | Planned | Graphical desktop/session and window-management guest. |
 
 All MaiaOS WASM guests are built with the Maia Suite, not Emscripten. C++98 sources use MaiaCpp in AST-strict mode to emit C89, then MaiaC emits and validates WebAssembly using the in-repository MaiaWASM toolchain. MaiaCC generates parsers from EBNF. Emscripten is currently used only to build the separate LVGL-WASM browser platform module.
@@ -39,6 +40,7 @@ Initialize MaiaCpp and its nested MaiaC, MaiaCC and MaiaWASM dependencies before
 git submodule update --init --recursive
 npm run build:kernel
 npm run build:apps
+npm run build:shell
 ```
 
 The recursive submodule pointers pin the toolchain versions. `./git_pull.sh` is the repository helper for updating the parent and recursively synchronizing submodules.

@@ -11,8 +11,11 @@
   "capabilities": [
     "memory.alloc",
     "memory.free",
+    "gfx.window",
+    "gfx.label",
+    "gfx.label.set_text",
+    "events.poll",
     "tty.input",
-    "tty.output",
     "vfs.open",
     "vfs.read",
     "vfs.close",

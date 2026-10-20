@@ -1,0 +1,229 @@
+# MaiaOS shell frontend integration handoff — 2026-10-20
+
+## Current objective/result
+
+### Authorized local snapshot commits — 2026-10-20
+
+The owner explicitly requested committing ALL reviewed pending files in MaiaCC
+and MaiaOS. This snapshot records the complete local shell/LVGL integration,
+generated comparison/runtime sources, collectors, fixtures, tests, benchmark and
+engineering documentation. Generated files are included under that explicit
+authorization; EBNF and reproducible generation commands remain authoritative.
+The preceding sections below record historical task states, including earlier
+uncommitted status. They do not describe this snapshot's final Git status.
+
+Commit MaiaCC first (tests/docs only), then MaiaOS. This step authorizes local
+commits; no push, npm/version change or submodule propagation is performed.
+The published baseline is MaiaCC 2dcd96c / MaiaOS 306c1ee. Existing published
+toolchain gitlinks are retained: the new MaiaCC delta changes no generator/runtime
+implementation. Future publication/synchronization follows the ecosystem protocol.
+The requested MaiaCC local commit is 176ea3b (five pending files); this MaiaOS
+snapshot follows it without recording an unpublished dependency gitlink.
+
+Precommit checks: `npm test` in MaiaOS passes 20 tests;
+`npm test` in principal MaiaCC passes all 114 tests;
+`node apps/shell/rtest.js --cpp` regenerates both legacy comparison backends from
+EBNF and passes all 44 JS and 44 C++98 cases with complete accepted-tree parity.
+The raw 5356-case differential run and phased measurements recorded below remain
+the current results; production grammar/WASM are unchanged by this commit task.
+The performance bottleneck is diagnosed, not optimized. Browser/device/VM limits
+remain explicit. Local pre-regeneration backup:
+/var/folders/6p/871hys095mq5mm7078sqplx40000gn/T/maiaos-precommit-_qzyy3fl.
+Final staged review includes 41 MaiaOS files and no submodule pointer changes.
+Both generated C++ comparison/runtime headers are byte-identical after the legacy
+runner regeneration. The staged default whitespace check reports seven existing
+trailing-space lines emitted by the JS template; exact generator output is
+preserved rather than patched manually. Other staged whitespace checks pass when
+that formatting category is excluded. No production grammar/WASM bytes changed.
+
+### Speed difference — latest completed diagnosis
+
+Owner clarified the concern is the large speed difference. The output-equivalence
+answer did not measure speed. Added `npm run benchmark:shell-parser` and
+`docs/SHELL_FRONTEND_PERFORMANCE.md`. The test-only WASM adapter now exposes
+separate lex/parse/parse+collector/full operations and guest-side repeated loops;
+`probe_run` retains the same behavior. No production source changed.
+
+PASS phased measurements for 13 inputs, four modes, median five warmed samples;
+build/startup/transport excluded, checksum/stack checks pass. Native Clang -O2;
+WASM own MaiaCpp AST strict -> C89 -> MaiaC/MaiaWASM. All timed implementations
+are UNINSTRUMENTED. Separate native instrumentation counts memo allocation bytes.
+For 896 bytes (`echo x;` repeated 128 times), lexer medians: JS 0.355 ms, native
+5.73 ms, WASM 323.7 ms. WASM parse alone 0.143 ms; parse+collector 0.320 ms.
+Regex memo: 17920 allocations, approximately 166346000 cumulative bytes, not live
+memory. From 16 to 128 commands: input grows 8x, memo bytes about 63x.
+
+Separate actual guest malloc/calloc probe: warm 64 KiB malloc+free 0.0199 us,
+calloc+free 126.9 us. The resulting ~1.94 ns/byte predicts ~322 ms clearing the
+measured memo volume, close to 324 ms lexer latency. This is a diagnostic
+cross-check/inference, not exclusive instruction-level profiling.
+
+JS collector deep clones add their own cost. Full collection on that list is
+JS 1891 ms, native 5.52 ms, WASM 324.5 ms. Therefore do not claim the complete
+JS frontend is always faster; distinguish lexing, parsing and collector costs.
+The measured lexer bottleneck does not demonstrate a grammar-recursion defect.
+It also does not by itself profile every stage of complete MaiaCC self-hosting.
+
+Core timing command `node scripts/benchmark-shell-frontends.mjs` PASS; allocator
+probe separately PASS on the resulting module. Current command includes the same
+allocator probe for future runs. Report/source/binaries:
+/var/folders/6p/871hys095mq5mm7078sqplx40000gn/T/maia-shell-performance-nXNEe7
+(report.json and allocation-report.json), /tmp/maia-shell-performance.log.
+Discarded instrumentation attempts: explicit double integer-zero initializer
+unsupported; later WASM counters did not validate. Final timed binaries use
+unmodified Regex/libc and counters come ONLY from separate native build; do not
+infer a proven compiler macro bug from the abandoned instrumentation.
+
+After adapter split, `MAIA_SHELL_KEEP_BUILD=1 npm run test:shell-equivalence`
+PASS again: all 5356 cases, 2400 accepted/2136 syntax/820 lexical errors, zero
+JS/native/WASM differences, every WASM stack restored. Artifacts:
+/var/folders/6p/871hys095mq5mm7078sqplx40000gn/T/maia-shell-equivalence-AmgZ3t;
+log /tmp/maia-shell-performance-equivalence.log. Syntax/diff checks pass.
+
+Only OS test adapter, new benchmark script, package command and documentation
+changed for this task. main 306c1ee; all work local, unstaged, no commit/push,
+gitlink/version/npm changes or upstream edits. Earlier unrelated work preserved.
+No active jobs or subagents. Next scoped performance work should reduce dense
+memo allocation/clearing in its principal owner while preserving Regex ordering,
+cycles/assertions/resource contracts and differential tests. Guest zero-fill
+optimization can reduce its cost but does not remove quadratic memo volume.
+Performance has been diagnosed, NOT yet optimized or fixed.
+
+### Previous generated lexer/parser equivalence task
+
+Owner requested checking actual JS/C++ equivalence, then clarified that no
+recursion reproducer is known and the former manual lexer may have been involved.
+Proceed with generated frontends; the manual lexer is not the current runtime.
+
+Added `npm run test:shell-equivalence`: same raw UTF-8 inputs -> regenerated JS,
+native strict C++98, and generated C++98 -> MaiaCpp AST strict -> C89 ->
+MaiaC/MaiaWASM. Test adapters contain transport/observation only; guest matching,
+parsing, Regex, allocation and collector remain real. Host imports are restricted
+to env memory primitives; graphics callbacks throw if unexpectedly invoked.
+
+PASS 5356 unique deterministic inputs (seed 0x4d414941): 2400 accepted,
+2136 syntax failures, 820 lexical failures; ZERO discrepancies among all three
+paths. Compared token types, raw values, UTF-16 offsets, lexical error positions,
+partial token streams on lexical errors, accepted complete tree hierarchy/rules/
+terminal values. Every WASM call restores its stack. Test guest ends at 22 pages.
+Adapters have 4096 input bytes, 2048 tokens, 8192 nodes; production limits remain
+255 editable bytes, 32 tokens, 1024 tree nodes and unchanged guest at 18 pages.
+Generated/mutated cases include ASCII controls/NUL, Unicode boundaries, operator/
+keyword/assignment pairs, compound constructs, quotes, truncations, 1024-byte
+words and nesting through 128. This is finite differential evidence, NOT a proof
+of equivalence on every input, identical unbounded stack budgets or POSIX
+correctness. Known shared grammar defects and JS deep-stack limit remain.
+
+Commands: `MAIA_SHELL_KEEP_BUILD=1 npm run test:shell-equivalence` PASS;
+`npm run test:shell-parser` PASS (52 cases + 15 recursion profiles);
+`npm test` PASS 20; `npm run test:shell-host` PASS 1000 repeated commands;
+`npm run test:shell-lvgl` PASS 1000 commands, 1252 real RGB565 flushes and stable
+stack/memory (18 pages). Log: /tmp/maia-shell-equivalence-test-shell-lvgl.log.
+No active builds/tests remain. Interactive browser/device/VM not run this task.
+Artifacts/report: /var/folders/6p/871hys095mq5mm7078sqplx40000gn/T/maia-shell-equivalence-nmY7Y6.
+Logs: /tmp/maia-shell-equivalence.log, /tmp/maia-shell-equivalence-regression.log,
+/tmp/maia-shell-equivalence-unit.log. First two adapter setup attempts failed
+because the host requires graphics/VFS tables; corrected in the final run, not a
+parser failure. Failure artifacts retained; do not confuse old attempts with PASS.
+
+Changes scoped to OS tests, package script and documentation only. EBNF hash
+915866d6508cbee10f16dd4c40ac14ef5a481fc89ec02afce425834620e7be25
+and shell.wasm hash below unchanged. No generator/compiler/source modifications,
+new public APIs, commits/pushes or submodule changes. main remains 306c1ee;
+existing unrelated dirty user/integration work preserved. No agents used.
+Next action: owner review or a concrete regression if one is discovered; no
+reproduced production recursion defect remains to fix from the available input.
+
+### Recursion investigation (subsequent owner report)
+
+The owner reported excessive shell grammar recursion without an input or trace.
+The owner later said no input/trace is known (see latest result above).
+No production fix has been made for this report.
+
+The raw generated-parser suite now has 52 JS/native C++ parity cases, including
+the deepest complete subshell and incomplete prefixes within the guest's 32-token
+budget. A separate generated JS rule profiler covers words, lists, pipelines,
+nested subshells and incomplete prefixes at 8/32/128 sizes. Flat inputs stay at
+11 active parse-method calls; nested depth is 7*n+11. No active same-rule/same-
+position reentry was detected, and rule attempts remain linear in these cases.
+This is measured coverage, not proof for every possible input.
+
+`npm run test:shell-parser`, `npm run test:shell-host` and
+`npm run test:shell-lvgl` all PASS after adding these regressions. Real LVGL:
+1282 flushes, 1000 repeated parses, stable restored stack and 18 memory pages.
+No build needed: production EBNF, generator and guest are unchanged.
+
+Unbounded JS parsing does have a stack-dependent limit: fresh default Node
+process accepts 512 nested subshells and rejects 1024 with an ordinary EOF syntax
+error. Instrumentation adds frames and lowers the threshold, so its observed
+512 rejection is NOT the uninstrumented limit. A warmed process can differ.
+At 1024 levels, fresh Node with --stack_size=256/512/984 rejects while
+--stack_size=2048 accepts, confirming dependence on the host call-stack budget.
+Do not mistake this for demonstrated infinite recursion or claim it is fixed.
+Measurements/logs and before-test copies: /tmp/maia-shell-recursion.
+Next: obtain the reported reproducer and locate its phase before changing EBNF
+or proposing generator implementation changes. No cross-repository edits,
+commits, pushes, API changes or resource-limit increases for this investigation.
+
+### Previous integration result
+
+The owner clarified that the missing generated lexer/parser integration was the
+problem and explicitly requested implementing it. The integration is COMPLETE
+locally: raw input -> generated C++98 lexer -> generated parser -> tree/command
+validation -> existing six-command execution through LVGL/events/VFS/process.
+Read AGENTS.md and SHELL_PARSER_INTEGRATION.md before continuing. No agents used.
+
+No active builds/tests remain. Browser interaction is unrun because the browser
+backend list is empty; actual LVGL-WASM rendering passed under Node.
+
+## Verified state
+
+- `main` HEAD `306c1ee`, local integration changes only; no new commit/push for this
+  task. Prior compiler/self-host publication remains complete and unchanged.
+- Local MaiaCpp pin `2998aa8` and all nested dependencies are clean/aligned.
+- Build: `npm run build:shell -- --check-c89` PASS; own compilers generate guest.
+  Clang is optional syntax-only validation. Production build is Node/Maia only.
+- `npm test`: 20 pass; shell grammar 32 valid / 9 invalid + 2 declared gaps;
+  `test:shell-parser`: 48 raw JS/native C++ cases with complete tree/token parity;
+  `test:shell-host`:six commands, editing, bounds/errors and 1,000 parses pass;
+  `test:shell-lvgl`:same checks, 1,000 parses and 1,253 real RGB565 flushes pass;
+  `test:lvgl-host`:kernel/Calculator/Clock actual LVGL regressions pass.
+- Memory 18 pages stays fixed; stack restored; manifest remains 32 pages.
+- WASM 1,182,597 bytes, SHA256
+  0519cc85a3da21fd8f57b110a150bcc2ec3a7c9be8a785d197788842997d84a0.
+
+## Important implementation contracts
+
+EBNF is unchanged. Generated runtime files stay under apps/shell/generated.
+Never hand-edit them or reinstate the handwritten tokenizer/operator/keyword
+classification or NAME matching. The shell collector is per parse, uses generated
+checkpoint/restore semantics, no-op abort after restore and sticky capacity
+failure. Backing arrays are compiler-owned; do not reintroduce fixed addresses.
+Quote removal and execution validation use generated tree nodes, not a second
+parser. Compound execution remains unsupported and is rejected before dispatch.
+
+Host bindings implement existing MaiaC libc memory primitives and guest allocator
+forwarding only; no new MaiaOS syscalls. LVGL/VFS/event architecture is preserved.
+The old static global collector caused unsupported direct global-struct access
+in MaiaC; per-call lifetime is appropriate here and matches the REx adapter.
+
+An early GUI stress test forgot LVGL ticks and exhausted the original 64 KiB pool.
+That test scheduling error is FIXED. All1000 assertions remain; tick after guest
+events matches the platform. A 256 KiB trial was reverted; original lv_conf.h and
+main.c bytes are preserved. Do not resurrect the abandoned budget increase from
+older failure logs. Actual original-config LVGL PASS is authoritative.
+
+## Preservation and next safe action
+
+Pre-task 97-file snapshot:
+/tmp/maiaos-shell-integration-before-inr07w6i/manifest.json.
+15 existing files intentionally changed; 82 unrelated baseline files preserved.
+New implementation/test/docs files are local. Existing user shell/UI work was
+not discarded or swept into commits. Publication must review the existing MVP
+prerequisites too; do not publish a partial slice that omits its host/UI support. Staging empty; no npm/version/history work.
+See /tmp/maiaos-shell-integration-final-evidence.json and the integration report.
+
+The requested integration needs no further code work. Later actions may include
+interactive browser verification, review/publication if explicitly authorized,
+and scoped grammar/POSIX/execution improvements. Known separator/reserved-word/
+IO_NUMBER gaps remain documented; do not claim POSIX shell completeness.

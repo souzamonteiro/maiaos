@@ -1,15 +1,23 @@
+#define MAIACPP_USE_C_ALLOCATOR
 #include <stdint.h>
 #include "generated/maia-shell-parser.hpp"
+#include "maia-shell-parse-tree-collector.hpp"
 
 #define MAIA_IMPORT(module_name, field_name) \
     __attribute__((import_module(module_name), import_name(field_name)))
 
 extern "C" {
-MAIA_IMPORT("maia.tty", "poll_line")
-int32_t maia_tty_poll_line(int32_t output_ptr, int32_t capacity);
+MAIA_IMPORT("maia.gfx", "window_create")
+int32_t maia_window_create(int32_t text_ptr, int32_t text_len);
 
-MAIA_IMPORT("maia.tty", "write")
-int32_t maia_tty_write(int32_t stream, int32_t input_ptr, int32_t length);
+MAIA_IMPORT("maia.gfx", "label_create")
+int32_t maia_label_create(int32_t parent, int32_t text_ptr, int32_t text_len);
+
+MAIA_IMPORT("maia.gfx", "label_set_text")
+int32_t maia_label_set_text(int32_t label, int32_t text_ptr, int32_t text_len);
+
+MAIA_IMPORT("maia.events", "poll")
+int32_t maia_events_poll(int32_t output_ptr, int32_t capacity);
 
 MAIA_IMPORT("maia.vfs", "open")
 int32_t maia_vfs_open(int32_t path_ptr, int32_t path_len, int32_t flags);
@@ -27,25 +35,49 @@ void maia_process_exit(int32_t status);
 static const int32_t kWouldBlock = -6;
 static const int32_t kVfsRead = 1;
 static const unsigned int kMaxLineBytes = 256;
+static const unsigned int kTerminalBytes = 4096;
 static const unsigned int kMaxTokens = 32;
 static const unsigned int kMaxWordBytes = 96;
 static const unsigned int kMaxArgs = 12;
-static const unsigned int kTokensOffset = 260;
-static const unsigned int kCommandWordsOffset = 900;
-static const unsigned int kReadBufferOffset = 2052;
-static const unsigned int kOutputBufferOffset = 2180;
 static const unsigned int kReadBufferBytes = 128;
-static const unsigned int kOutputBufferBytes = 256;
-static const unsigned int kShellStorageBytes = 2436;
-static const unsigned int kShellStorageAddress = 8192;
+static const unsigned int kOutputBufferBytes = 257;
+static const unsigned int kEventPacketBytes = 24;
+static const unsigned int kEventVersion = 1;
+static const unsigned int kEventGfxClicked = 1;
+static const unsigned int kEventKey = 2;
+static const unsigned int kKeyText = 0;
+static const unsigned int kKeyEnter = 1;
+static const unsigned int kKeyBackspace = 2;
+static const unsigned int kKeyLeft = 3;
+static const unsigned int kKeyRight = 4;
+static const unsigned int kKeyHome = 5;
+static const unsigned int kKeyEnd = 6;
+static const unsigned int kKeyDelete = 7;
+static const unsigned int kKeyUp = 8;
+static const unsigned int kKeyDown = 9;
 
-#define gShellStorage ((uint8_t*)kShellStorageAddress)
-#define gLine ((char*)gShellStorage)
-#define gTokens ((MaiaCCParserToken*)(gShellStorage + kTokensOffset))
-#define gCommandWords ((char*)(gShellStorage + kCommandWordsOffset))
-#define gReadBuffer (gShellStorage + kReadBufferOffset)
-#define gOutputBuffer ((char*)(gShellStorage + kOutputBufferOffset))
+/* Compiler-owned storage cannot overlap generated lexer tables or the stack. */
+static char gLine[256];
+static MaiaCCParserToken gTokens[32];
+static MaiaShellParseTreeNode gParseNodes[1024];
+static char gCommandWords[1152];
+static uint8_t gReadBuffer[128];
+static char gOutputBuffer[257];
+static char gTerminalText[4096];
+static uint8_t gEventPacket[24];
 static unsigned int gTokenCount = 0;
+static unsigned int gTerminalLength = 0;
+static unsigned int gLineLength = 0;
+static unsigned int gCursor = 0;
+static int gWindowHandle = -1;
+static int gOutputLabelHandle = -1;
+static int gInputLabelHandle = -1;
+static int gHasPreviousLine = 0;
+static int gExited = 0;
+static char gPreviousLine[256];
+static const char kWindowTitle[] = "Maia Shell";
+static const char kStartupText[] = "MaiaOS Shell MVP. Type help to begin.\n";
+static const char kEmptyText[] = "";
 
 static char charAt(const char* text, unsigned int index)
 {
@@ -77,10 +109,20 @@ static int textEquals(const char* left, const char* right)
 
 static int writeBytes(int32_t stream, const char* bytes, unsigned int length)
 {
-    return maia_tty_write(
-        stream,
-        static_cast<int32_t>(reinterpret_cast<uintptr_t>(bytes)),
-        static_cast<int32_t>(length));
+    if (stream != 1 && stream != 2) return -1;
+    if (length >= kTerminalBytes) return -1;
+    if (gTerminalLength + length >= kTerminalBytes) gTerminalLength = 0;
+    for (unsigned int index = 0; index < length; ++index) {
+        putChar(gTerminalText, gTerminalLength, bytes[index]);
+        ++gTerminalLength;
+    }
+    putChar(gTerminalText, gTerminalLength, 0);
+    if (gOutputLabelHandle < 0) return 0;
+    const int32_t textPointer = static_cast<int32_t>(reinterpret_cast<uintptr_t>(gTerminalText));
+    return maia_label_set_text(
+        gOutputLabelHandle,
+        textPointer,
+        static_cast<int32_t>(gTerminalLength));
 }
 
 static int writeText(int32_t stream, const char* text)
@@ -88,262 +130,14 @@ static int writeText(int32_t stream, const char* text)
     return writeBytes(stream, text, textLength(text));
 }
 
-static int appendToken(unsigned int type, unsigned int start, unsigned int end)
+static void clearTerminal(void)
 {
-    MaiaCCParserToken* tokens = (MaiaCCParserToken*)(gShellStorage + kTokensOffset);
-    const unsigned int count = gTokenCount;
-    MaiaCCParserToken* token = tokens + count;
-    const unsigned int length = end - start;
-    const char* value = gLine + start;
-    if (count >= kMaxTokens) {
-        return 0;
+    gTerminalLength = 0;
+    putChar(gTerminalText, 0, 0);
+    if (gOutputLabelHandle >= 0) {
+        maia_label_set_text(gOutputLabelHandle,
+            static_cast<int32_t>(reinterpret_cast<uintptr_t>(gTerminalText)), 0);
     }
-    if (length >= kMaxWordBytes) {
-        return 0;
-    }
-    token->type = type;
-    token->value = value;
-    token->length = length;
-    token->start = start;
-    token->end = end;
-    gTokenCount = count + 1;
-    return 1;
-}
-
-static int isSpace(char value)
-{
-    return value == 32 || value == 9 || value == 13;
-}
-
-static int isNameStart(char value)
-{
-    return (value >= 'a' && value <= 'z')
-        || (value >= 'A' && value <= 'Z')
-        || value == '_';
-}
-
-static int isNamePart(char value)
-{
-    return isNameStart(value) || (value >= '0' && value <= '9');
-}
-
-static int spanEquals(unsigned int start, unsigned int end, const char* value)
-{
-    if (end - start != textLength(value)) return 0;
-    for (unsigned int index = 0; index < end - start; ++index) {
-        if (charAt(gLine, start + index) != charAt(value, index)) return 0;
-    }
-    return 1;
-}
-
-static unsigned int reservedWordToken(unsigned int start, unsigned int end)
-{
-    if (spanEquals(start, end, "if")) return MAIACC_TOKEN_TOKEN_if;
-    if (spanEquals(start, end, "then")) return MAIACC_TOKEN_TOKEN_then;
-    if (spanEquals(start, end, "elif")) return MAIACC_TOKEN_TOKEN_elif;
-    if (spanEquals(start, end, "else")) return MAIACC_TOKEN_TOKEN_else;
-    if (spanEquals(start, end, "fi")) return MAIACC_TOKEN_TOKEN_fi;
-    if (spanEquals(start, end, "while")) return MAIACC_TOKEN_TOKEN_while;
-    if (spanEquals(start, end, "until")) return MAIACC_TOKEN_TOKEN_until;
-    if (spanEquals(start, end, "for")) return MAIACC_TOKEN_TOKEN_for;
-    if (spanEquals(start, end, "in")) return MAIACC_TOKEN_TOKEN_in;
-    if (spanEquals(start, end, "do")) return MAIACC_TOKEN_TOKEN_do;
-    if (spanEquals(start, end, "done")) return MAIACC_TOKEN_TOKEN_done;
-    return 0;
-}
-
-static unsigned int classifyWord(unsigned int start, unsigned int end, int wasQuoted)
-{
-    if (wasQuoted) return MAIACC_TOKEN_WORD;
-    const unsigned int reserved = reservedWordToken(start, end);
-    if (reserved) return reserved;
-
-    unsigned int equalIndex = start;
-    while (equalIndex < end && charAt(gLine, equalIndex) != '=') ++equalIndex;
-    if (equalIndex < end && equalIndex > start && isNameStart(charAt(gLine, start))) {
-        unsigned int nameIndex = start + 1;
-        while (nameIndex < equalIndex && isNamePart(charAt(gLine, nameIndex))) ++nameIndex;
-        if (nameIndex == equalIndex) return MAIACC_TOKEN_ASSIGNMENT_WORD;
-    }
-
-    if (start < end && charAt(gLine, start) >= '0' && charAt(gLine, start) <= '9') {
-        unsigned int digit = start;
-        while (digit < end && charAt(gLine, digit) >= '0' && charAt(gLine, digit) <= '9') ++digit;
-        if (digit == end) return MAIACC_TOKEN_IO_NUMBER;
-    }
-    return MAIACC_TOKEN_WORD;
-}
-
-static int appendOperator(const char* line, unsigned int* position)
-{
-    const unsigned int start = *position;
-    const char current = charAt(line, start);
-    unsigned int type = 0;
-    unsigned int length = 1;
-
-    if (current == ';') type = MAIACC_TOKEN_TOKEN__3B_;
-    else if (current == '&' && charAt(line, start + 1) == '&') {
-        type = MAIACC_TOKEN_TOKEN__26__26_;
-        length = 2;
-    } else if (current == '|' && charAt(line, start + 1) == '|') {
-        type = MAIACC_TOKEN_TOKEN__7C__7C_;
-        length = 2;
-    } else if (current == '!') type = MAIACC_TOKEN_TOKEN__21_;
-    else if (current == '|') type = MAIACC_TOKEN_TOKEN__7C_;
-    else if (current == '&') type = MAIACC_TOKEN_TOKEN__26_;
-    else if (current == '(') type = MAIACC_TOKEN_TOKEN__28_;
-    else if (current == ')') type = MAIACC_TOKEN_TOKEN__29_;
-    else if (current == '{') type = MAIACC_TOKEN_TOKEN__7B_;
-    else if (current == '}') type = MAIACC_TOKEN_TOKEN__7D_;
-    else if (current == '>') {
-        if (charAt(line, start + 1) == '>') {
-            type = MAIACC_TOKEN_TOKEN__3E__3E_;
-            length = 2;
-        } else if (charAt(line, start + 1) == '&') {
-            type = MAIACC_TOKEN_TOKEN__3E__26_;
-            length = 2;
-        } else if (charAt(line, start + 1) == '|') {
-            type = MAIACC_TOKEN_TOKEN__3E__7C_;
-            length = 2;
-        } else type = MAIACC_TOKEN_TOKEN__3E_;
-    } else if (current == '<') {
-        if (charAt(line, start + 1) == '>') {
-            type = MAIACC_TOKEN_TOKEN__3C__3E_;
-            length = 2;
-        } else if (charAt(line, start + 1) == '&') {
-            type = MAIACC_TOKEN_TOKEN__3C__26_;
-            length = 2;
-        } else type = MAIACC_TOKEN_TOKEN__3C_;
-    }
-
-    if (!type) return 0;
-    if (!appendToken(type, start, start + length)) return 0;
-    *position += length;
-    return 1;
-}
-
-static int tokenizeLine(const char* line)
-{
-    gTokenCount = 0;
-    unsigned int position = 0;
-    while (charAt(line, position)) {
-        const char leadingSpace = charAt(line, position);
-        if (leadingSpace == 32 || leadingSpace == 9 || leadingSpace == 13) {
-            ++position;
-            continue;
-        }
-        if (charAt(line, position) == '#') break;
-        if (charAt(line, position) == ';' || charAt(line, position) == '&'
-            || charAt(line, position) == '|' || charAt(line, position) == '!'
-            || charAt(line, position) == '(' || charAt(line, position) == ')'
-            || charAt(line, position) == '{' || charAt(line, position) == '}'
-            || charAt(line, position) == '>' || charAt(line, position) == '<') {
-            if (!appendOperator(line, &position)) {
-                return 0;
-            }
-            continue;
-        }
-
-        const unsigned int start = position;
-        char quote = 0;
-        int wasQuoted = 0;
-        int hasContent = 0;
-        while (charAt(line, position)) {
-            const char current = charAt(line, position);
-            if (!quote && (isSpace(current) || current == ';' || current == '&'
-                || current == '|' || current == '!' || current == '('
-                || current == ')' || current == '{' || current == '}'
-                || current == '>' || current == '<')) break;
-            if (current == 92 && quote != 39) {
-                ++position;
-                if (!charAt(line, position)) {
-                    return 0;
-                }
-                if (!charAt(line, position)) return 0;
-                if (position - start + 1 >= kMaxWordBytes) return 0;
-                ++position;
-                hasContent = 1;
-                continue;
-            }
-            if ((current == 39 || current == '"') && (!quote || quote == current)) {
-                wasQuoted = 1;
-                quote = quote ? 0 : current;
-                ++position;
-                hasContent = 1;
-                continue;
-            }
-            if (position - start + 1 >= kMaxWordBytes) {
-                return 0;
-            }
-            if (position - start + 1 >= kMaxWordBytes) return 0;
-            ++position;
-            hasContent = 1;
-        }
-        if (quote || !hasContent) return 0;
-        const unsigned int tokenType = classifyWord(start, position, wasQuoted);
-        if (!appendToken(tokenType, start, position)) {
-            return 0;
-        }
-    }
-
-    if (!appendToken(MAIACC_TOKEN_NEWLINE, position, position + 1)) return 0;
-    if (!appendToken(MAIACC_TOKEN_EOF, position + 1, position + 1)) return 0;
-    return 1;
-}
-
-static int parseShellLine(void)
-{
-    MaiaCCParserState parser;
-    MaiaCCParserToken* tokens = (MaiaCCParserToken*)(gShellStorage + kTokensOffset);
-    MaiaCCParseEvents events;
-    events.context = 0;
-    events.checkpoint = 0;
-    events.restore = 0;
-    events.startNonterminal = 0;
-    events.terminal = 0;
-    events.endNonterminal = 0;
-    events.abortNonterminal = 0;
-    events.matchesContextual = 0;
-    maiaCCParserStateInit(&parser, tokens, gTokenCount, &events);
-    return maiaCC_parse(&parser);
-}
-
-static int buildCommandAst(unsigned int* wordCount)
-{
-    MaiaCCParserToken* tokens = (MaiaCCParserToken*)(gShellStorage + kTokensOffset);
-    *wordCount = 0;
-    for (unsigned int index = 0; index < gTokenCount; ++index) {
-        const MaiaCCParserToken* token = tokens + index;
-        if (token->type == MAIACC_TOKEN_EOF || token->type == MAIACC_TOKEN_NEWLINE) break;
-        if (token->type != MAIACC_TOKEN_WORD && token->type != MAIACC_TOKEN_IO_NUMBER) return 0;
-        if (*wordCount >= kMaxArgs || token->end < token->start
-            || token->end > textLength(gLine)) return 0;
-
-        char* word = gCommandWords + (*wordCount * kMaxWordBytes);
-        unsigned int outputLength = 0;
-        char quote = 0;
-        for (unsigned int position = token->start; position < token->end; ++position) {
-            const char current = charAt(gLine, position);
-            if ((current == 39 || current == '"') && (!quote || quote == current)) {
-                quote = quote ? 0 : current;
-                continue;
-            }
-            if (current == 92 && quote != 39 && position + 1 < token->end) {
-                ++position;
-                if (outputLength + 1 >= kMaxWordBytes) return 0;
-                putChar(word, outputLength, charAt(gLine, position));
-                ++outputLength;
-                continue;
-            }
-            if (outputLength + 1 >= kMaxWordBytes) return 0;
-            putChar(word, outputLength, current);
-            ++outputLength;
-        }
-        if (quote) return 0;
-        putChar(word, outputLength, 0);
-        ++*wordCount;
-    }
-    return *wordCount > 0;
 }
 
 static void writePrompt(void)
@@ -351,9 +145,125 @@ static void writePrompt(void)
     writeText(1, "maia> ");
 }
 
+static void renderInputLine(void)
+{
+    unsigned int displayLength;
+    unsigned int index;
+    char value;
+    char* lineBuffer;
+    char* outputBuffer;
+    displayLength = 0;
+    lineBuffer = gLine;
+    outputBuffer = gOutputBuffer;
+    for (index = 0; index <= gLineLength; ++index) {
+        if (index == gCursor) value = '|';
+        else if (index < gCursor) value = charAt(lineBuffer, index);
+        else value = charAt(lineBuffer, index - 1);
+        putChar(outputBuffer, displayLength, value);
+        ++displayLength;
+    }
+    putChar(outputBuffer, displayLength, 0);
+    if (gInputLabelHandle >= 0) {
+        maia_label_set_text(
+            gInputLabelHandle,
+            static_cast<int32_t>(reinterpret_cast<uintptr_t>(outputBuffer)),
+            static_cast<int32_t>(displayLength));
+    }
+}
+
+static uint32_t readUint32(const uint8_t* bytes)
+{
+    return static_cast<uint32_t>(bytes[0])
+        | (static_cast<uint32_t>(bytes[1]) << 8)
+        | (static_cast<uint32_t>(bytes[2]) << 16)
+        | (static_cast<uint32_t>(bytes[3]) << 24);
+}
+
+static int tokenizeLine(void)
+{
+    MaiaCCLexerState lexer;
+    gTokenCount = 0;
+    maiaCCLexerStateInit(&lexer, gLine, gLineLength);
+    if (!maiaCCLexerTokenize(&lexer, gTokens, kMaxTokens)) {
+        return lexer.failed == 1 ? 0 : 3;
+    }
+    gTokenCount = lexer.tokenCount;
+    return 1;
+}
+
+static int parseShellLine(MaiaShellParseTreeCollector* tree)
+{
+    MaiaCCParserState parser;
+    MaiaCCParseEvents events;
+    maiaShellParseTreeInit(
+        tree,
+        gParseNodes,
+        kShellParseTreeCapacity);
+    maiaShellParseTreeSetEvents(tree, &events);
+    maiaCCParserStateInit(&parser, gTokens, gTokenCount, &events);
+    const int accepted = maiaCC_parse(&parser);
+    if (tree->overflow) return 3;
+    return accepted && !parser.failed && parser.position == gTokenCount
+        && tree->activeNode < 0;
+}
+
+static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned int* wordCount)
+{
+    *wordCount = 0;
+    unsigned int simpleCommands = 0;
+    for (unsigned int index = 0; index < tree->nodeCount; ++index) {
+        const MaiaShellParseTreeNode* node = tree->nodes + index;
+        if (node->kind != kShellParseTreeNonterminal) continue;
+        if (textEquals(node->name, "SimpleCommand")) ++simpleCommands;
+        if (textEquals(node->name, "Assignment") || textEquals(node->name, "Redirection")) return 2;
+    }
+    if (simpleCommands > 1) return 2;
+    for (unsigned int index = 0; index < tree->nodeCount; ++index) {
+        const MaiaShellParseTreeNode* node = tree->nodes + index;
+        if (node->kind != kShellParseTreeTerminal) continue;
+        if (node->token == MAIACC_TOKEN_EOF || node->token == MAIACC_TOKEN_NEWLINE) continue;
+        if (node->token != MAIACC_TOKEN_WORD
+            && node->token != MAIACC_TOKEN_ASSIGNMENT_WORD
+            && node->token != MAIACC_TOKEN_IO_NUMBER) return 2;
+        if (*wordCount >= kMaxArgs) return 3;
+
+        char* word = gCommandWords + (*wordCount * kMaxWordBytes);
+        unsigned int outputLength = 0;
+        char quote = 0;
+        for (unsigned int offset = 0; offset < node->length; ++offset) {
+            char current = node->value[offset];
+            if ((current == 39 || current == 34) && (!quote || quote == current)) {
+                quote = quote ? 0 : current;
+                continue;
+            }
+            if (current == 92 && quote != 39 && offset + 1 < node->length) {
+                ++offset;
+                current = node->value[offset];
+            }
+            if (outputLength + 1 >= kMaxWordBytes) return 3;
+            putChar(word, outputLength, current);
+            ++outputLength;
+        }
+        if (quote) return 2;
+        putChar(word, outputLength, 0);
+        ++*wordCount;
+    }
+    return 1;
+}
+
+static int parseSimpleCommand(unsigned int* wordCount)
+{
+    MaiaShellParseTreeCollector tree;
+    const int lexical = tokenizeLine();
+    if (lexical != 1) return lexical;
+    const int parsed = parseShellLine(&tree);
+    if (parsed != 1) return parsed;
+    return buildCommandWords(&tree, wordCount);
+}
+
 static void printHelp(void)
 {
-    writeText(1, "Commands: help, echo, pwd, cat /system/welcome.txt, exit\n");
+    writeText(1, "Commands: help, echo, pwd, cat /system/welcome.txt, clear, exit\n");
 }
 
 static void runCat(const char* path)
@@ -377,18 +287,15 @@ static void runCat(const char* path)
             break;
         }
         if (count == 0) break;
-        maia_tty_write(
-            1,
-            static_cast<int32_t>(reinterpret_cast<uintptr_t>(gReadBuffer)),
-            count);
+        writeBytes(1, reinterpret_cast<const char*>(gReadBuffer), static_cast<unsigned int>(count));
     }
     maia_vfs_close(handle);
 }
 
-static void executeAst(unsigned int wordCount)
+static void executeCommand(unsigned int wordCount)
 {
     const char* command = gCommandWords;
-    char* outputBuffer = (char*)(gShellStorage + kOutputBufferOffset);
+    char* outputBuffer = gOutputBuffer;
     if (textEquals(command, "help")) {
         printHelp();
     } else if (textEquals(command, "echo")) {
@@ -402,7 +309,10 @@ static void executeAst(unsigned int wordCount)
     } else if (textEquals(command, "cat") && wordCount == 2
         && textEquals(gCommandWords + kMaxWordBytes, "/system/welcome.txt")) {
         runCat(gCommandWords + kMaxWordBytes);
+    } else if (textEquals(command, "clear") && wordCount == 1) {
+        clearTerminal();
     } else if (textEquals(command, "exit") && wordCount == 1) {
+        gExited = 1;
         maia_process_exit(0);
     } else {
         putChar(outputBuffer, 0, 0);
@@ -427,45 +337,129 @@ static void executeAst(unsigned int wordCount)
 
 static void processLine(void)
 {
-    MaiaCCParserToken* tokens = (MaiaCCParserToken*)(gShellStorage + kTokensOffset);
-    MaiaCCParserToken* firstToken = tokens;
-    if (!tokenizeLine(gLine)) {
-        writeText(2, "lexer failure\n");
-        writePrompt();
-        return;
-    }
-    if (!parseShellLine()) {
-        writeText(2, "syntax error\n");
-        writePrompt();
-        return;
-    }
-
     unsigned int wordCount = 0;
-    if (buildCommandAst(&wordCount)) executeAst(wordCount);
-    else if (firstToken->type != MAIACC_TOKEN_NEWLINE) {
-        writeText(2, "unsupported syntax: MVP accepts simple commands only\n");
+    const int parsed = parseSimpleCommand(&wordCount);
+    if (parsed != 1) {
+        if (parsed == 0) writeText(2, "syntax error\n");
+        else if (parsed == 3) writeText(2, "shell input limit exceeded\n");
+        else writeText(2, "unsupported syntax: simple commands only\n");
+        writePrompt();
+        return;
     }
-    if (wordCount > 0 && textEquals(firstToken->value, "exit") && wordCount == 1) return;
-    writePrompt();
+    if (wordCount > 0) executeCommand(wordCount);
+    if (!gExited) writePrompt();
+}
+
+static void submitLine(void)
+{
+    putChar(gLine, gLineLength, 0);
+    writeBytes(1, gLine, gLineLength);
+    writeText(1, "\n");
+    if (gLineLength > 0) {
+        for (unsigned int index = 0; index <= gLineLength; ++index) {
+            putChar(gPreviousLine, index, charAt(gLine, index));
+        }
+        gHasPreviousLine = 1;
+    }
+    processLine();
+    if (gExited) return;
+    gLineLength = 0;
+    gCursor = 0;
+    putChar(gLine, 0, 0);
+    renderInputLine();
+}
+
+static void setInputLine(const char* text)
+{
+    unsigned int length = textLength(text);
+    if (length >= kMaxLineBytes) length = kMaxLineBytes - 1;
+    for (unsigned int index = 0; index < length; ++index) {
+        putChar(gLine, index, charAt(text, index));
+    }
+    putChar(gLine, length, 0);
+    gLineLength = length;
+    gCursor = length;
+    renderInputLine();
+}
+
+static void handleKeyEvent(uint32_t codepoint, uint32_t key)
+{
+    if (key == kKeyEnter) {
+        submitLine();
+    } else if (key == kKeyText) {
+        if (codepoint < 32 || codepoint > 126 || gLineLength + 1 >= kMaxLineBytes) return;
+        for (unsigned int index = gLineLength; index > gCursor; --index) {
+            putChar(gLine, index, charAt(gLine, index - 1));
+        }
+        putChar(gLine, gCursor, static_cast<char>(codepoint));
+        ++gLineLength;
+        ++gCursor;
+        putChar(gLine, gLineLength, 0);
+        renderInputLine();
+    } else if (key == kKeyBackspace && gCursor > 0) {
+        for (unsigned int index = gCursor - 1; index < gLineLength; ++index) {
+            putChar(gLine, index, charAt(gLine, index + 1));
+        }
+        --gCursor;
+        --gLineLength;
+        renderInputLine();
+    } else if (key == kKeyDelete && gCursor < gLineLength) {
+        for (unsigned int index = gCursor; index < gLineLength; ++index) {
+            putChar(gLine, index, charAt(gLine, index + 1));
+        }
+        --gLineLength;
+        renderInputLine();
+    } else if (key == kKeyLeft && gCursor > 0) {
+        --gCursor;
+        renderInputLine();
+    } else if (key == kKeyRight && gCursor < gLineLength) {
+        ++gCursor;
+        renderInputLine();
+    } else if (key == kKeyHome) {
+        gCursor = 0;
+        renderInputLine();
+    } else if (key == kKeyEnd) {
+        gCursor = gLineLength;
+        renderInputLine();
+    } else if (key == kKeyUp && gHasPreviousLine) {
+        setInputLine(gPreviousLine);
+    } else if (key == kKeyDown) {
+        setInputLine("");
+    }
 }
 
 extern "C" __attribute__((visibility("default"))) void maia_app_start(void)
 {
-    writeText(1, "MaiaOS Shell MVP. Type help for commands.\n");
+    gWindowHandle = maia_window_create(
+        static_cast<int32_t>(reinterpret_cast<uintptr_t>(kWindowTitle)),
+        static_cast<int32_t>(sizeof(kWindowTitle) - 1));
+    if (gWindowHandle < 0) return;
+    gOutputLabelHandle = maia_label_create(
+        gWindowHandle,
+        static_cast<int32_t>(reinterpret_cast<uintptr_t>(kEmptyText)),
+        0);
+    gInputLabelHandle = maia_label_create(
+        gWindowHandle,
+        static_cast<int32_t>(reinterpret_cast<uintptr_t>(kEmptyText)),
+        0);
+    if (gOutputLabelHandle < 0 || gInputLabelHandle < 0) return;
+    writeText(1, kStartupText);
     writePrompt();
+    renderInputLine();
 }
 
 extern "C" __attribute__((visibility("default"))) void maiaos_step(void)
 {
-    char* line = (char*)gShellStorage;
-    const int32_t count = maia_tty_poll_line(
-        static_cast<int32_t>(reinterpret_cast<uintptr_t>(line)),
-        kMaxLineBytes);
-    if (count == kWouldBlock) return;
-    if (count < 0 || static_cast<unsigned int>(count) > kMaxLineBytes) {
-        writeText(2, "tty input error\n");
-        return;
+    for (unsigned int eventIndex = 0; eventIndex < 16; ++eventIndex) {
+        const int32_t bytes = maia_events_poll(
+            static_cast<int32_t>(reinterpret_cast<uintptr_t>(gEventPacket)),
+            kEventPacketBytes);
+        if (bytes == kWouldBlock) return;
+        if (bytes != kEventPacketBytes || readUint32(gEventPacket) != kEventVersion) return;
+        const uint32_t eventType = readUint32(gEventPacket + 4);
+        if (eventType == kEventKey) {
+            handleKeyEvent(readUint32(gEventPacket + 12), readUint32(gEventPacket + 16));
+            if (gExited) return;
+        }
     }
-    putChar(line, count, 0);
-    processLine();
 }

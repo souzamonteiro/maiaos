@@ -2354,10 +2354,10 @@ const _buildHostEnv = // Auto-generated host env – do not edit manually
     }
   }
   return {
-    "__malloc": (p0) => __malloc(p0),
-    "__free": (p0) => __free(p0),
-    "__maia__tty__poll_line": (p0, p1) => { const target = __resolveHost(["maia","tty","poll_line"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0, p1); return (result ?? 0); },
-    "__maia__tty__write": (p0, p1, p2) => { const target = __resolveHost(["maia","tty","write"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0, p1, p2); return (result ?? 0); },
+    "__maia__gfx__window_create": (p0, p1) => { const target = __resolveHost(["maia","gfx","window_create"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0, p1); return (result ?? 0); },
+    "__maia__gfx__label_create": (p0, p1, p2) => { const target = __resolveHost(["maia","gfx","label_create"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0, p1, p2); return (result ?? 0); },
+    "__maia__gfx__label_set_text": (p0, p1, p2) => { const target = __resolveHost(["maia","gfx","label_set_text"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0, p1, p2); return (result ?? 0); },
+    "__maia__events__poll": (p0, p1) => { const target = __resolveHost(["maia","events","poll"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0, p1); return (result ?? 0); },
     "__maia__vfs__open": (p0, p1, p2) => { const target = __resolveHost(["maia","vfs","open"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0, p1, p2); return (result ?? 0); },
     "__maia__vfs__read": (p0, p1, p2) => { const target = __resolveHost(["maia","vfs","read"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0, p1, p2); return (result ?? 0); },
     "__maia__vfs__close": (p0) => { const target = __resolveHost(["maia","vfs","close"]); if (typeof target.fn !== 'function') return 0; const result = target.fn.call(target.thisValue, p0); return (result ?? 0); },

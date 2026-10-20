@@ -8,6 +8,10 @@
     {
       "name": "Maia Clock",
       "manifest": "examples/clock/manifest.json"
+    },
+    {
+      "name": "Maia Shell MVP",
+      "manifest": "shell/manifest.json"
     }
   ]
 }

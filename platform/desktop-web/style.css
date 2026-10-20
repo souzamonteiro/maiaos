@@ -93,35 +93,6 @@ button:hover {
   color: #9edcc8;
 }
 
-#tty-panel {
-  margin: 0 24px 24px;
-  padding: 12px;
-  border-top: 1px solid #45635c;
-}
-
-#tty-output {
-  min-height: 100px;
-  max-height: 220px;
-  overflow: auto;
-  margin: 0 0 10px;
-  color: #d4e8df;
-  font: 13px/1.45 ui-monospace, monospace;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-#tty-form {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-#tty-input {
-  flex: 1;
-  min-width: 120px;
-  font: 14px ui-monospace, monospace;
-}
-
 @media (max-width: 700px) {
   header,
   footer {
@@ -133,7 +104,4 @@ button:hover {
     padding: 10px 0;
   }
 
-  #tty-panel {
-    margin: 0 12px 12px;
-  }
 }

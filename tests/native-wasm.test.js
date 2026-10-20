@@ -75,6 +75,36 @@ test("native compile errors remain observable", async () => {
   );
 });
 
+test("MaiaC memory primitives preserve WASM size/grow and allocation-failure semantics", () => {
+  const host = createMaiaHostImports({
+    vfs: new MemoryVfsAdapter(),
+    graphics: { windowCreate: () => 1, labelCreate: () => 1, labelSetText: () => 0,
+      buttonCreate: () => 1, objectDestroy: () => 0 },
+  });
+  const env = host.imports.env;
+  assert.equal(env.__builtin_wasm_memory_size(0), -1);
+  assert.equal(env.__builtin_wasm_memory_grow(0, 1), -1);
+  const memory = new WebAssembly.Memory({ initial: 1, maximum: 2 });
+  host.attachMemory(memory);
+  assert.equal(env.__builtin_wasm_memory_size(0), 1);
+  assert.equal(env.__builtin_wasm_memory_size(1), -1);
+  assert.equal(env.__builtin_wasm_memory_grow(1, 1), -1);
+  assert.equal(env.__builtin_wasm_memory_grow(0, -1), -1);
+  assert.equal(env.__builtin_wasm_memory_grow(0, 0.5), -1);
+  assert.equal(env.__builtin_wasm_memory_grow(0, 1), 1);
+  assert.equal(env.__builtin_wasm_memory_size(0), 2);
+  assert.equal(env.__builtin_wasm_memory_grow(0, 1), -1);
+  assert.equal(env.__builtin_wasm_memory_size(0), 2);
+  const allocatorCalls = [];
+  host.attachInstance({ exports: { memory,
+    malloc: (size) => (allocatorCalls.push(["malloc", size]), 512),
+    free: (pointer) => allocatorCalls.push(["free", pointer]),
+  } });
+  assert.equal(env.__malloc(64), 512);
+  env.__free(512);
+  assert.deepEqual(allocatorCalls, [["malloc", 64], ["free", 512]]);
+});
+
 test("Maia host imports forward callbacks and validate guest memory", () => {
   const calls = [];
   const host = createMaiaHostImports({

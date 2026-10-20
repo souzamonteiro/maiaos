@@ -1,6 +1,17 @@
 import {
   createMaiaHostImports,
   MAIA_EVENT_GFX_CLICKED,
+  MAIA_EVENT_KEY,
+  MAIA_KEY_BACKSPACE,
+  MAIA_KEY_DELETE,
+  MAIA_KEY_DOWN,
+  MAIA_KEY_END,
+  MAIA_KEY_ENTER,
+  MAIA_KEY_HOME,
+  MAIA_KEY_LEFT,
+  MAIA_KEY_RIGHT,
+  MAIA_KEY_TEXT,
+  MAIA_KEY_UP,
 } from "/runtime/maia-host-imports.js";
 import { assertManifestCapabilities } from "/runtime/maia-capabilities.js";
 import { instantiateNativeWasm } from "/runtime/native-wasm-browser.js";
@@ -15,9 +26,6 @@ import {
 
 const screen = document.getElementById("screen");
 const status = document.getElementById("status");
-const ttyPanel = document.getElementById("tty-panel");
-const ttyOutput = document.getElementById("tty-output");
-const ttyInput = document.getElementById("tty-input");
 const BROWSER_HOST_GRANTS = [
   "memory.alloc",
   "memory.free",
@@ -31,14 +39,12 @@ const BROWSER_HOST_GRANTS = [
   "vfs.read",
   "vfs.write",
   "vfs.close",
+  "tty.input",
   "process.exit",
   "time.monotonic",
 ];
 const runningProcesses = new Set();
 const buttonOwners = new Map();
-const TTY_QUEUE_LIMIT = 32;
-const TTY_LINE_LIMIT = 256;
-const TTY_OUTPUT_LIMIT = 12000;
 let lvglModule = null;
 let graphicsCallbacks = null;
 let kernelProcess = null;
@@ -49,29 +55,55 @@ function reportError(error) {
   console.error(error);
 }
 
-function appendTtyOutput(text) {
-  ttyOutput.textContent += text;
-  if (ttyOutput.textContent.length > TTY_OUTPUT_LIMIT) {
-    ttyOutput.textContent = ttyOutput.textContent.slice(-TTY_OUTPUT_LIMIT);
+function keyboardTargetProcess() {
+  for (const process of runningProcesses) {
+    if (process.running && process.acceptsKeyboardInput) return process;
   }
-  ttyOutput.scrollTop = ttyOutput.scrollHeight;
+  return null;
 }
 
-function createProcessTty() {
-  const lines = [];
-  return {
-    pollLine() {
-      return lines.shift() ?? null;
-    },
-    write(stream, text) {
-      appendTtyOutput(stream === 2 ? `[stderr] ${text}` : text);
-    },
-    enqueueLine(line) {
-      if (lines.length >= TTY_QUEUE_LIMIT) return false;
-      lines.push(line);
-      return true;
-    },
-  };
+function routeKeyboardEvent(event) {
+  const process = keyboardTargetProcess();
+  if (!process || document.activeElement !== screen) return false;
+
+  let keyKind;
+  let data0 = 0;
+  if (event.key === "Enter") keyKind = MAIA_KEY_ENTER;
+  else if (event.key === "Backspace") keyKind = MAIA_KEY_BACKSPACE;
+  else if (event.key === "Delete") keyKind = MAIA_KEY_DELETE;
+  else if (event.key === "ArrowLeft") keyKind = MAIA_KEY_LEFT;
+  else if (event.key === "ArrowRight") keyKind = MAIA_KEY_RIGHT;
+  else if (event.key === "ArrowUp") keyKind = MAIA_KEY_UP;
+  else if (event.key === "ArrowDown") keyKind = MAIA_KEY_DOWN;
+  else if (event.key === "Home" || (event.ctrlKey && event.key.toLowerCase() === "a")) {
+    keyKind = MAIA_KEY_HOME;
+  } else if (event.key === "End" || (event.ctrlKey && event.key.toLowerCase() === "e")) {
+    keyKind = MAIA_KEY_END;
+  } else if (
+    event.key.length === 1
+    && !event.ctrlKey
+    && !event.metaKey
+    && !event.altKey
+    && event.key.codePointAt(0) >= 32
+    && event.key.codePointAt(0) <= 126
+  ) {
+    keyKind = MAIA_KEY_TEXT;
+    data0 = event.key.codePointAt(0);
+  } else {
+    return false;
+  }
+
+  event.preventDefault();
+  const result = process.host.enqueueEvent({
+    type: MAIA_EVENT_KEY,
+    objectHandle: 0,
+    data0,
+    data1: keyKind,
+  });
+  if (result !== 0) {
+    document.getElementById("app-status").textContent = "Shell keyboard event queue is full.";
+  }
+  return true;
 }
 
 function processGraphics(process) {
@@ -132,9 +164,6 @@ function stopProcess(process, exitCode) {
     document.getElementById("app-status").textContent =
       `${process.name} exited (${exitCode}).`;
   }
-  if (process.tty && ![...runningProcesses].some((candidate) => candidate.tty)) {
-    ttyPanel.hidden = true;
-  }
 }
 
 async function createAppVfs(appId) {
@@ -162,21 +191,17 @@ async function startProcess({ manifest, bytes, role, entryName, stepName }) {
     appId: manifest.id,
     name: manifest.name ?? manifest.id,
     role,
+    acceptsKeyboardInput: manifest.capabilities.includes("tty.input"),
     running: false,
     windowHandle: -1,
     runtime: null,
     host: null,
-    tty: manifest.capabilities.includes("tty.input")
-      && manifest.capabilities.includes("tty.output")
-      ? createProcessTty()
-      : null,
     vfs: await createAppVfs(manifest.id),
     stepExport: stepName || null,
   };
   process.host = createMaiaHostImports({
     graphics: processGraphics(process),
     vfs: process.vfs,
-    tty: process.tty,
     log: (level, message) => {
       status.textContent = message;
       (level >= 2 ? console.error : console.log)(
@@ -217,10 +242,6 @@ async function startProcess({ manifest, bytes, role, entryName, stepName }) {
   process.runtime = runtime;
   process.running = true;
   runningProcesses.add(process);
-  if (process.tty) {
-    ttyOutput.textContent = "";
-    ttyPanel.hidden = false;
-  }
   try {
     entry();
   } catch (error) {
@@ -263,6 +284,7 @@ async function launchSelectedApp() {
   });
   document.getElementById("app-status").textContent =
     `${process.name} running as PID ${process.pid}.`;
+  if (process.acceptsKeyboardInput) screen.focus();
 }
 
 async function loadAppCatalog() {
@@ -395,29 +417,8 @@ async function boot() {
     });
   });
 
-  document.getElementById("tty-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const process = [...runningProcesses].find(
-      (candidate) => candidate.running && candidate.tty,
-    );
-    if (!process) return;
-
-    const line = ttyInput.value;
-    if (new TextEncoder().encode(line).byteLength >= TTY_LINE_LIMIT) {
-      appendTtyOutput("input line too long\n");
-      return;
-    }
-    if (!process.tty.enqueueLine(line)) {
-      appendTtyOutput("input queue full\n");
-      return;
-    }
-
-    appendTtyOutput(`${line}\n`);
-    ttyInput.value = "";
-    ttyInput.focus();
-  });
-
   screen.addEventListener("pointerdown", (event) => {
+    screen.focus();
     screen.setPointerCapture(event.pointerId);
     sendPointer(lvglModule, event, true);
   });
@@ -428,12 +429,14 @@ async function boot() {
     sendPointer(lvglModule, event, false),
   );
   window.addEventListener("keydown", (event) => {
+    if (routeKeyboardEvent(event)) return;
     if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault();
       lvglModule._maiaos_lvgl_key(event.key === "Enter" ? 1 : 2, 1);
     }
   });
   window.addEventListener("keyup", (event) => {
+    if (document.activeElement === screen && keyboardTargetProcess()) return;
     if (event.key === "Enter" || event.key === "Tab") {
       lvglModule._maiaos_lvgl_key(event.key === "Enter" ? 1 : 2, 0);
     }

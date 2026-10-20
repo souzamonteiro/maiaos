@@ -79,7 +79,7 @@ flowchart TB
 | Browser boot coordinator | Implemented | `platform/desktop-web/main.js`; it starts the kernel and catalog apps using the native browser WASM reference engine. A separate `bootloader.js` is not present. |
 | `kernel.wasm` | Implemented | C++98 guest built through MaiaCpp -> MaiaC; uses the `maia.*` ABI. |
 | `io.wasm` | Planned | Future guest/service boundary for TTY and I/O; no module source or build target exists yet. |
-| `shell.wasm` | Planned | Future command shell; only EBNF grammar/parser tests exist, not a shell runtime. |
+| `shell.wasm` | Bounded MVP (2026-10-20) | MaiaCC-generated C++98 lexer/parser integrated into the guest; six simple commands via existing LVGL/events/VFS syscalls. Compound execution/POSIX conformance remain future work. |
 | `desktop.wasm` | Planned | Future graphical desktop/session guest; it is distinct from the current LVGL-WASM browser platform module. |
 | Calculator and Clock `app.wasm` | Implemented | C++98 example apps built through MaiaCpp -> MaiaC and launched with manifests. |
 
