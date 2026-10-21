@@ -2,84 +2,44 @@
 #include <stdint.h>
 #include "generated/maia-shell-parser.hpp"
 #include "maia-shell-parse-tree-collector.hpp"
-
-#define MAIA_IMPORT(module_name, field_name) \
-    __attribute__((import_module(module_name), import_name(field_name)))
-
+#define MAIA_IMPORT(module_name, field_name) __attribute__((import_module(module_name), import_name(field_name)))
 extern "C" {
-MAIA_IMPORT("maia.gfx", "window_create")
-int32_t maia_window_create(int32_t text_ptr, int32_t text_len);
-
-MAIA_IMPORT("maia.gfx", "label_create")
-int32_t maia_label_create(int32_t parent, int32_t text_ptr, int32_t text_len);
-
-MAIA_IMPORT("maia.gfx", "label_set_text")
-int32_t maia_label_set_text(int32_t label, int32_t text_ptr, int32_t text_len);
-
-MAIA_IMPORT("maia.events", "poll")
-int32_t maia_events_poll(int32_t output_ptr, int32_t capacity);
-
-MAIA_IMPORT("maia.vfs", "open")
-int32_t maia_vfs_open(int32_t path_ptr, int32_t path_len, int32_t flags);
-
-MAIA_IMPORT("maia.vfs", "read")
-int32_t maia_vfs_read(int32_t handle, int32_t output_ptr, int32_t count);
-
-MAIA_IMPORT("maia.vfs", "close")
-int32_t maia_vfs_close(int32_t handle);
-
-MAIA_IMPORT("maia.process", "exit")
-void maia_process_exit(int32_t status);
+MAIA_IMPORT("maia.stream", "read") int32_t maia_stream_read(int32_t handle, int32_t pointer, int32_t count);
+MAIA_IMPORT("maia.stream", "write") int32_t maia_stream_write(int32_t handle, int32_t pointer, int32_t count);
+MAIA_IMPORT("maia.stream", "close") int32_t maia_stream_close(int32_t handle);
+MAIA_IMPORT("maia.vfs", "open") int32_t maia_vfs_open(int32_t pointer, int32_t length, int32_t flags);
+MAIA_IMPORT("maia.vfs", "read") int32_t maia_vfs_read(int32_t handle, int32_t pointer, int32_t count);
+MAIA_IMPORT("maia.vfs", "close") int32_t maia_vfs_close(int32_t handle);
+MAIA_IMPORT("maia.process", "exit") void maia_process_exit(int32_t status);
 }
-
-static const int32_t kWouldBlock = -6;
 static const int32_t kVfsRead = 1;
-static const unsigned int kMaxLineBytes = 256;
-static const unsigned int kTerminalBytes = 4096;
 static const unsigned int kMaxTokens = 32;
 static const unsigned int kMaxWordBytes = 96;
 static const unsigned int kMaxArgs = 12;
 static const unsigned int kReadBufferBytes = 128;
 static const unsigned int kOutputBufferBytes = 263;
-static const unsigned int kEventPacketBytes = 24;
-static const unsigned int kEventVersion = 1;
-static const unsigned int kEventGfxClicked = 1;
-static const unsigned int kEventKey = 2;
-static const unsigned int kKeyText = 0;
-static const unsigned int kKeyEnter = 1;
-static const unsigned int kKeyBackspace = 2;
-static const unsigned int kKeyLeft = 3;
-static const unsigned int kKeyRight = 4;
-static const unsigned int kKeyHome = 5;
-static const unsigned int kKeyEnd = 6;
-static const unsigned int kKeyDelete = 7;
-static const unsigned int kKeyUp = 8;
-static const unsigned int kKeyDown = 9;
-
-/* Compiler-owned storage cannot overlap generated lexer tables or the stack. */
+static const char kPromptText[] = "maia> ";
 static char gLine[256];
 static MaiaCCParserToken gTokens[32];
 static MaiaShellParseTreeNode gParseNodes[1024];
 static char gCommandWords[1152];
 static uint8_t gReadBuffer[128];
 static char gOutputBuffer[263];
-static char gTerminalText[4096];
-static uint8_t gEventPacket[24];
-static unsigned int gTokenCount = 0;
-static unsigned int gTerminalLength = 0;
+static uint8_t gInputBuffer[256];
+static unsigned int gInputOffset = 0;
+static unsigned int gInputCount = 0;
 static unsigned int gLineLength = 0;
-static unsigned int gCursor = 0;
-static int gWindowHandle = -1;
-static int gOutputLabelHandle = -1;
-static int gInputLabelHandle = -1;
-static int gHasPreviousLine = 0;
+static unsigned int gTokenCount = 0;
+static int gInputOverflow = 0;
+static int gInputEOF = 0;
+static int gCatHandle = -1;
+static int gExitRequested = 0;
 static int gExited = 0;
-static char gPreviousLine[256];
-static const char kWindowTitle[] = "Maia Shell";
-static const char kStartupText[] = "MaiaOS Shell MVP. Type help to begin.\n";
-static const char kPromptText[] = "maia> ";
-static const char kEmptyText[] = "";
-
+static int gFatal = 0;
+static char gPendingOutput[4096];
+static uint8_t gPendingStream[4096];
+static unsigned int gPendingOffset = 0;
+static unsigned int gPendingLength = 0;
 static char charAt(const char* text, unsigned int index)
 {
     return *(text + index);
@@ -108,77 +68,50 @@ static int textEquals(const char* left, const char* right)
     return charAt(left, index) == charAt(right, index);
 }
 
+
 static int writeBytes(int32_t stream, const char* bytes, unsigned int length)
 {
-    if (stream != 1 && stream != 2) return -1;
-    if (length >= kTerminalBytes) return -1;
-    if (gTerminalLength + length >= kTerminalBytes) gTerminalLength = 0;
-    for (unsigned int index = 0; index < length; ++index) {
-        putChar(gTerminalText, gTerminalLength, bytes[index]);
-        ++gTerminalLength;
+    if ((stream != 1 && stream != 2) || length > 4096 - gPendingLength) {
+        gFatal = 1; return -4;
     }
-    putChar(gTerminalText, gTerminalLength, 0);
-    if (gOutputLabelHandle < 0) return 0;
-    const int32_t textPointer = static_cast<int32_t>(reinterpret_cast<uintptr_t>(gTerminalText));
-    return maia_label_set_text(
-        gOutputLabelHandle,
-        textPointer,
-        static_cast<int32_t>(gTerminalLength));
+    for (unsigned int i = 0; i < length; ++i) {
+        gPendingOutput[gPendingLength] = bytes[i];
+        gPendingStream[gPendingLength] = static_cast<uint8_t>(stream);
+        ++gPendingLength;
+    }
+    return static_cast<int>(length);
 }
-
-static int writeText(int32_t stream, const char* text)
+static int writeText(int32_t stream, const char* text) { return writeBytes(stream, text, textLength(text)); }
+static void flushOutput(void)
 {
-    return writeBytes(stream, text, textLength(text));
+    for (unsigned int attempt = 0; attempt < 16 && gPendingOffset < gPendingLength; ++attempt) {
+        unsigned int end = gPendingOffset + 1;
+        const unsigned int stream = gPendingStream[gPendingOffset];
+        while (end < gPendingLength && gPendingStream[end] == stream) ++end;
+        const int32_t result = maia_stream_write(static_cast<int32_t>(stream),
+            static_cast<int32_t>(reinterpret_cast<uintptr_t>(gPendingOutput + gPendingOffset)),
+            static_cast<int32_t>(end - gPendingOffset));
+        if (result == -6) return;
+        if (result <= 0) { gFatal = 1; return; }
+        gPendingOffset += static_cast<unsigned int>(result);
+    }
+    if (gPendingOffset == gPendingLength) { gPendingOffset = 0; gPendingLength = 0; }
 }
-
-static void clearTerminal(void)
+static void runCat(const char* path)
 {
-    gTerminalLength = 0;
-    putChar(gTerminalText, 0, 0);
-    if (gOutputLabelHandle >= 0) {
-        maia_label_set_text(gOutputLabelHandle,
-            static_cast<int32_t>(reinterpret_cast<uintptr_t>(gTerminalText)), 0);
-    }
+    gCatHandle = maia_vfs_open(static_cast<int32_t>(reinterpret_cast<uintptr_t>(path)),
+        static_cast<int32_t>(textLength(path)), kVfsRead);
+    if (gCatHandle <= 0) { gCatHandle = -1; writeText(2, "cat: cannot open file\n"); }
 }
-
-static void renderInputLine(void)
+static void resumeCat(void)
 {
-    unsigned int displayLength;
-    unsigned int index;
-    char value;
-    char* lineBuffer;
-    char* outputBuffer;
-    displayLength = 0;
-    lineBuffer = gLine;
-    outputBuffer = gOutputBuffer;
-    for (index = 0; index < sizeof(kPromptText) - 1; ++index) {
-        putChar(outputBuffer, displayLength, charAt(kPromptText, index));
-        ++displayLength;
-    }
-    for (index = 0; index <= gLineLength; ++index) {
-        if (index == gCursor) value = '|';
-        else if (index < gCursor) value = charAt(lineBuffer, index);
-        else value = charAt(lineBuffer, index - 1);
-        putChar(outputBuffer, displayLength, value);
-        ++displayLength;
-    }
-    putChar(outputBuffer, displayLength, 0);
-    if (gInputLabelHandle >= 0) {
-        maia_label_set_text(
-            gInputLabelHandle,
-            static_cast<int32_t>(reinterpret_cast<uintptr_t>(outputBuffer)),
-            static_cast<int32_t>(displayLength));
-    }
+    const int32_t count = maia_vfs_read(gCatHandle,
+        static_cast<int32_t>(reinterpret_cast<uintptr_t>(gReadBuffer)), kReadBufferBytes);
+    if (count > 0) { writeBytes(1, reinterpret_cast<const char*>(gReadBuffer), static_cast<unsigned int>(count)); return; }
+    maia_vfs_close(gCatHandle); gCatHandle = -1;
+    if (count < 0) writeText(2, "cat: read failed\n");
+    if (!gInputEOF) writeText(1, kPromptText);
 }
-
-static uint32_t readUint32(const uint8_t* bytes)
-{
-    return static_cast<uint32_t>(bytes[0])
-        | (static_cast<uint32_t>(bytes[1]) << 8)
-        | (static_cast<uint32_t>(bytes[2]) << 16)
-        | (static_cast<uint32_t>(bytes[3]) << 24);
-}
-
 static int tokenizeLine(void)
 {
     MaiaCCLexerState lexer;
@@ -266,32 +199,6 @@ static void printHelp(void)
     writeText(1, "Commands: help, echo, pwd, cat /system/welcome.txt, clear, exit\n");
 }
 
-static void runCat(const char* path)
-{
-    const int32_t handle = maia_vfs_open(
-        static_cast<int32_t>(reinterpret_cast<uintptr_t>(path)),
-        static_cast<int32_t>(textLength(path)),
-        kVfsRead);
-    if (handle <= 0) {
-        writeText(2, "cat: cannot open file\n");
-        return;
-    }
-
-    for (;;) {
-        const int32_t count = maia_vfs_read(
-            handle,
-            static_cast<int32_t>(reinterpret_cast<uintptr_t>(gReadBuffer)),
-            kReadBufferBytes);
-        if (count < 0) {
-            writeText(2, "cat: read failed\n");
-            break;
-        }
-        if (count == 0) break;
-        writeBytes(1, reinterpret_cast<const char*>(gReadBuffer), static_cast<unsigned int>(count));
-    }
-    maia_vfs_close(handle);
-}
-
 static void executeCommand(unsigned int wordCount)
 {
     const char* command = gCommandWords;
@@ -310,10 +217,9 @@ static void executeCommand(unsigned int wordCount)
         && textEquals(gCommandWords + kMaxWordBytes, "/system/welcome.txt")) {
         runCat(gCommandWords + kMaxWordBytes);
     } else if (textEquals(command, "clear") && wordCount == 1) {
-        clearTerminal();
+        writeText(1, "\033[2J\033[H");
     } else if (textEquals(command, "exit") && wordCount == 1) {
-        gExited = 1;
-        maia_process_exit(0);
+        gExitRequested = 1;
     } else {
         putChar(outputBuffer, 0, 0);
         const char* prefix = "command not found: ";
@@ -343,121 +249,61 @@ static void processLine(void)
         if (parsed == 0) writeText(2, "syntax error\n");
         else if (parsed == 3) writeText(2, "shell input limit exceeded\n");
         else writeText(2, "unsupported syntax: simple commands only\n");
+        if (!gInputEOF) writeText(1, kPromptText);
         return;
     }
     if (wordCount > 0) executeCommand(wordCount);
+    if (!gExitRequested && !gInputEOF && gCatHandle < 0) writeText(1, kPromptText);
 }
 
-static void submitLine(void)
+
+static void finish(void)
 {
-    putChar(gLine, gLineLength, 0);
-    writeText(1, kPromptText);
-    writeBytes(1, gLine, gLineLength);
-    writeText(1, "\n");
-    if (gLineLength > 0) {
-        for (unsigned int index = 0; index <= gLineLength; ++index) {
-            putChar(gPreviousLine, index, charAt(gLine, index));
-        }
-        gHasPreviousLine = 1;
-    }
-    processLine();
-    if (gExited) return;
-    gLineLength = 0;
-    gCursor = 0;
-    putChar(gLine, 0, 0);
-    renderInputLine();
+    if (gCatHandle >= 0) { maia_vfs_close(gCatHandle); gCatHandle = -1; }
+    for (int32_t handle = 0; handle < 3; ++handle) maia_stream_close(handle);
+    gExited = 1; maia_process_exit(gFatal ? 1 : 0);
 }
-
-static void setInputLine(const char* text)
+static void completeLine(void)
 {
-    unsigned int length = textLength(text);
-    if (length >= kMaxLineBytes) length = kMaxLineBytes - 1;
-    for (unsigned int index = 0; index < length; ++index) {
-        putChar(gLine, index, charAt(text, index));
-    }
-    putChar(gLine, length, 0);
-    gLineLength = length;
-    gCursor = length;
-    renderInputLine();
+    gLine[gLineLength] = 0;
+    if (gInputOverflow) {
+        writeText(2, "shell input limit exceeded\n");
+        if (!gInputEOF) writeText(1, kPromptText);
+    } else processLine();
+    gLineLength = 0; gInputOverflow = 0;
 }
-
-static void handleKeyEvent(uint32_t codepoint, uint32_t key)
-{
-    if (key == kKeyEnter) {
-        submitLine();
-    } else if (key == kKeyText) {
-        if (codepoint < 32 || codepoint > 126 || gLineLength + 1 >= kMaxLineBytes) return;
-        for (unsigned int index = gLineLength; index > gCursor; --index) {
-            putChar(gLine, index, charAt(gLine, index - 1));
-        }
-        putChar(gLine, gCursor, static_cast<char>(codepoint));
-        ++gLineLength;
-        ++gCursor;
-        putChar(gLine, gLineLength, 0);
-        renderInputLine();
-    } else if (key == kKeyBackspace && gCursor > 0) {
-        for (unsigned int index = gCursor - 1; index < gLineLength; ++index) {
-            putChar(gLine, index, charAt(gLine, index + 1));
-        }
-        --gCursor;
-        --gLineLength;
-        renderInputLine();
-    } else if (key == kKeyDelete && gCursor < gLineLength) {
-        for (unsigned int index = gCursor; index < gLineLength; ++index) {
-            putChar(gLine, index, charAt(gLine, index + 1));
-        }
-        --gLineLength;
-        renderInputLine();
-    } else if (key == kKeyLeft && gCursor > 0) {
-        --gCursor;
-        renderInputLine();
-    } else if (key == kKeyRight && gCursor < gLineLength) {
-        ++gCursor;
-        renderInputLine();
-    } else if (key == kKeyHome) {
-        gCursor = 0;
-        renderInputLine();
-    } else if (key == kKeyEnd) {
-        gCursor = gLineLength;
-        renderInputLine();
-    } else if (key == kKeyUp && gHasPreviousLine) {
-        setInputLine(gPreviousLine);
-    } else if (key == kKeyDown) {
-        setInputLine("");
-    }
-}
-
 extern "C" __attribute__((visibility("default"))) void maia_app_start(void)
 {
-    gWindowHandle = maia_window_create(
-        static_cast<int32_t>(reinterpret_cast<uintptr_t>(kWindowTitle)),
-        static_cast<int32_t>(sizeof(kWindowTitle) - 1));
-    if (gWindowHandle < 0) return;
-    gOutputLabelHandle = maia_label_create(
-        gWindowHandle,
-        static_cast<int32_t>(reinterpret_cast<uintptr_t>(kEmptyText)),
-        0);
-    gInputLabelHandle = maia_label_create(
-        gWindowHandle,
-        static_cast<int32_t>(reinterpret_cast<uintptr_t>(kEmptyText)),
-        0);
-    if (gOutputLabelHandle < 0 || gInputLabelHandle < 0) return;
-    writeText(1, kStartupText);
-    renderInputLine();
+    writeText(1, "MaiaOS Shell MVP. Type help to begin.\n");
+    writeText(1, kPromptText); flushOutput();
 }
-
 extern "C" __attribute__((visibility("default"))) void maiaos_step(void)
 {
-    for (unsigned int eventIndex = 0; eventIndex < 16; ++eventIndex) {
-        const int32_t bytes = maia_events_poll(
-            static_cast<int32_t>(reinterpret_cast<uintptr_t>(gEventPacket)),
-            kEventPacketBytes);
-        if (bytes == kWouldBlock) return;
-        if (bytes != kEventPacketBytes || readUint32(gEventPacket) != kEventVersion) return;
-        const uint32_t eventType = readUint32(gEventPacket + 4);
-        if (eventType == kEventKey) {
-            handleKeyEvent(readUint32(gEventPacket + 12), readUint32(gEventPacket + 16));
-            if (gExited) return;
+    if (gExited) return;
+    for (unsigned int budget = 0; budget < 16; ++budget) {
+        flushOutput();
+        if (gFatal) { finish(); return; }
+        if (gPendingLength) return;
+        if (gExitRequested) { finish(); return; }
+        if (gCatHandle >= 0) { resumeCat(); continue; }
+        if (gInputEOF) { gExitRequested = 1; continue; }
+        if (gInputOffset == gInputCount) {
+            const int32_t count = maia_stream_read(0,
+                static_cast<int32_t>(reinterpret_cast<uintptr_t>(gInputBuffer)), 256);
+            if (count == -6) return;
+            if (count < 0) { gFatal = 1; continue; }
+            if (count == 0) {
+                gInputEOF = 1;
+                if (gLineLength || gInputOverflow) completeLine();
+                continue;
+            }
+            gInputOffset = 0; gInputCount = static_cast<unsigned int>(count);
+        }
+        for (unsigned int i = 0; i < 256 && gInputOffset < gInputCount; ++i) {
+            const char value = static_cast<char>(gInputBuffer[gInputOffset++]);
+            if (value == '\n') { completeLine(); break; }
+            if (gLineLength < 255) gLine[gLineLength++] = value;
+            else gInputOverflow = 1;
         }
     }
 }

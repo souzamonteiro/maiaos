@@ -1,6 +1,6 @@
 # MaiaOS Host ABI v0 (draft)
 
-**Status:** The `maiaos-embedded-v0` kernel profile below is fixed for the browser/Node reference hosts. The wider OS ABI and device-host conformance remain proposed and incomplete. Stable namespaces use `maia.gfx`, `maia.vfs`, `maia.events`, `maia.process`, `maia.time`, and `maia.log`. The manifest declares requested capabilities; each host applies a separate policy. Functions use WASM numeric types and guest memory offsets; strings are UTF-8 with explicit lengths. Return `i32` status codes unless documented otherwise.
+**Status:** The `maiaos-embedded-v0` kernel profile below is fixed for the browser/Node reference hosts. The wider OS ABI and device-host conformance remain proposed and incomplete. Stable namespaces use `maia.gfx`, `maia.vfs`, `maia.events`, `maia.process`, `maia.time`, `maia.stream`, and `maia.log`. The manifest declares requested capabilities; each host applies a separate policy. Functions use WASM numeric types and guest memory offsets; strings are UTF-8 with explicit lengths. Return `i32` status codes unless documented otherwise.
 
 | Namespace      | Import signature (conceptual)                         | Purpose                   |
 | -------------- | ----------------------------------------------------- | ------------------------- |
@@ -15,12 +15,15 @@
 | `maia.vfs`     | `read(fd:i32, out_ptr:i32, count:i32) -> i32`         | Bytes read or error       |
 | `maia.vfs`     | `write(fd:i32, in_ptr:i32, count:i32) -> i32`         | Bytes written or error    |
 | `maia.vfs`     | `close(fd:i32) -> i32`                                | Closes file handle        |
+| `maia.stream`  | `read(handle:i32, out_ptr:i32, capacity:i32) -> i32` | Copied bytes, EOF or status |
+| `maia.stream`  | `write(handle:i32, ptr:i32, length:i32) -> i32` | Partial copied write or status |
+| `maia.stream`  | `close(handle:i32) -> i32` | Close owned endpoint |
 | `maia.time`    | `monotonic_ms() -> i64`                               | Monotonic clock           |
 | `maia.process` | `exit(status:i32) -> void`                            | Exit current instance     |
 
 ## Status codes
 
-`0 = OK`; negative values are `-1 = INVALID_ARGUMENT`, `-2 = NOT_FOUND`, `-3 = PERMISSION_DENIED`, `-4 = OUT_OF_MEMORY`, `-5 = UNSUPPORTED`, `-6 = WOULD_BLOCK`, and `-7 = INVALID_HANDLE`. `-5` is reserved and is not returned by the current embedded profile. Calls returning handles use positive values on success; reads and writes return nonnegative byte counts, with zero indicating EOF for reads. Negative failures must never be confused with valid handles or byte counts.
+`0 = OK`; negative values are `-1 = INVALID_ARGUMENT`, `-2 = NOT_FOUND`, `-3 = PERMISSION_DENIED`, `-4 = OUT_OF_MEMORY`, `-5 = UNSUPPORTED`, `-6 = WOULD_BLOCK`, `-7 = INVALID_HANDLE`, and `-8 = CLOSED` (stream reader closed). `-5` is reserved and is not returned by the current embedded profile. Calls returning handles use positive values on success; reads and writes return nonnegative byte counts, with zero indicating EOF for reads. Negative failures must never be confused with valid handles or byte counts.
 
 ## Event packet v0
 
@@ -33,7 +36,11 @@ browser reference host uses a bounded 64-event FIFO; a full queue returns
 Fixed 24-byte little-endian header: `u32 version`, `u32 type`, `u32 objectHandle`,
 `u32 data0`, `u32 data1`, `u32 reserved`. Version 1 event type `1` is
 `GFX_CLICKED`; `objectHandle` identifies the LVGL-backed object, `data0/data1`
-are zero, and `reserved` is zero. No pointers. Define a future extended payload
+are zero, and `reserved` is zero. Type `2` is `KEY`: `objectHandle=0`,
+`data0` is the text codepoint and `data1` is the key identifier (0 text, 1 Enter,
+2 Backspace, 3 Left, 4 Right, 5 Home, 6 End, 7 Delete, 8 Up, 9 Down).
+The initial canonical editor accepts printable ASCII only. Keyboard routing
+requires the additional host capability `tty.input`. No pointers. Define a future extended payload
 format with explicit lengths.
 
 ## Import linking
@@ -107,6 +114,72 @@ Process lifecycle, capabilities, persistent event semantics, scheduling and VM
 fuel still need explicit signatures and tests before the kernel grows to depend
 on them. The Node reference VFS is in-memory; the browser adapter persists each
 app's private home subtree and `/shared` through IndexedDB.
+
+## Bounded stream and shell/I/O reference profile
+
+Approved additive extension, implemented 2026-10-20. Imports map to capabilities
+`stream.read`, `stream.write`, `stream.close`, with separate manifest request and
+host grant checks. Existing imports/signatures remain unchanged. Stream imports
+are registered only when a broker and a process identity are supplied.
+
+Each pipe owns a 4096-byte ring by default; the maximum copy is 4096 bytes per
+call. The reference broker has 64 pipes globally and 16 endpoints per process.
+Privileged boot setup can select a smaller ring (1..4096 bytes); guests cannot
+create arbitrary endpoints. Handles are process local and do not reveal pointers.
+Writes copy bytes into the ring; reads copy them into the caller's memory.
+Neither operation interprets UTF-8. Validate the entire requested guest range and
+size before consuming or copying anything: bad arguments/ranges return -1 with
+no partial transfer. Wrong direction returns -3; unknown/closed handles return -7.
+A valid zero-length call returns 0 without changing state, even if its peer closed.
+
+Empty live reads and full writes return -6. A nonempty write after the final
+reader closes returns -8. After the final writer closes, reads drain buffered
+bytes then return 0 (EOF). Partial writes are allowed; each guest must retain the
+unwritten suffix, yield and resume in later steps. There is no readiness event
+in this profile. Close returns 0 once, then -7; process exit/trap/startup cleanup
+closes every owned endpoint. Descriptor aliases keep the endpoint direction alive
+until its final alias closes. Buffers are released after both directions close.
+
+The boot coordinator creates these bindings before starting I/O then the shell:
+
+| Guest | Handle | Direction | Binding |
+|---|---|---|---|
+| shell | 0 | read | stdin from I/O |
+| shell | 1 | write | stdout to terminal |
+| shell | 2 | write | stderr, alias of stdout for this terminal profile |
+| I/O | 3 | write | canonical stdin to shell |
+| I/O | 4 | read | terminal output |
+| I/O | 5 | read | alias of terminal output |
+
+Using one terminal output pipe preserves the actual order of writes to stdout
+and stderr, including errors followed by a prompt. Handles 1/2 remain distinct
+logical descriptors; this boot profile attaches both to the same TTY sink.
+It does not implement arbitrary pipelines, descriptor transfer, spawning, or a
+complete POSIX fd ABI. Stream and VFS handles belong to separate namespaces.
+
+`io.wasm` exports `maia_io_start` and `maiaos_step`; it imports only gfx,
+events, stream and process calls. It owns keyboard editing, one-line history,
+canonical input and LVGL output. `shell.wasm` exports `maia_app_start` and
+`maiaos_step`; it imports stream, VFS and process calls plus toolchain support.
+It owns prompt bytes, generated lexing/parsing and builtin execution; it never
+imports graphics/events. The host transports bytes and schedules each guest;
+`kernel.wasm` remains scheduled in a third isolated memory. Exit drains output
+before I/O observes EOF and tears down its window. Startup failures release both
+sets of endpoints and any created I/O window.
+
+Current limits: 255 ASCII editable bytes, 4096-byte terminal history, 256-byte
+pending canonical input, 4096-byte pending shell output. I/O decodes output UTF-8
+incrementally, replacing invalid/truncated sequences with U+FFFD, preserving
+codepoint boundaries when truncating display text. It supports the shell's
+`ESC[2J` clear and `ESC[H` home sequence only, not a full ANSI terminal. History
+resets at its fixed limit. Initial measured memories: I/O 2 pages, shell 18 pages;
+manifest startup budgets: 8 and 32 respectively. Runtime memory/fuel enforcement
+and native-device stream bindings are separate pending work.
+
+Checks: `npm test`, `npm run test:io-streams`, `npm run test:shell-host`,
+`npm run test:shell-lvgl`, `npm run test:shell-boot`, `npm run test:lvgl-host`.
+These exercise actual guest WASM on the native reference engine and actual LVGL
+in the GUI checks; they do not establish browser interaction or device conformance.
 
 ## Evolution
 

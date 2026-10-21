@@ -19,7 +19,7 @@ flowchart TB
 
 **Platform**: implements display, touch, monotonic clock, file I/O, synchronization, networking and reboot using platform APIs.
 
-**MaiaOS guest and applications**: the implemented kernel guest is written in C++98 and compiled to `/system/kernel.wasm`; Calculator and Clock are C++98 WASM example apps with manifests. C++98 guests use MaiaCpp AST-strict -> C89 -> MaiaC -> WASM, with MaiaCC and MaiaWASM from the recursive in-repository toolchain submodules. `io.wasm`, `shell.wasm` and `desktop.wasm` are planned artifacts, not implemented modules. The native platform boot host that loads the kernel through MaiaWASMVM remains planned; browser startup currently uses `platform/desktop-web/main.js` and the native browser WebAssembly reference engine.
+**MaiaOS guest and applications**: the implemented kernel guest is written in C++98 and compiled to `/system/kernel.wasm`; Calculator and Clock are C++98 WASM example apps with manifests. C++98 guests use MaiaCpp AST-strict -> C89 -> MaiaC -> WASM, with MaiaCC and MaiaWASM from the recursive in-repository toolchain submodules. `shell.wasm` implements the bounded six-command MVP with generated lexing/parsing; the real C++98 `io.wasm` owns its LVGL terminal and keyboard editing. Bounded copied-byte streams connect their isolated memories while the kernel keeps stepping. `desktop.wasm` remains planned. The native platform boot host that loads the kernel through MaiaWASMVM remains planned; browser startup currently uses `platform/desktop-web/main.js` and the native browser WebAssembly reference engine.
 
 ## Execution options
 

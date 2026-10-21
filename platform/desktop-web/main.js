@@ -23,6 +23,7 @@ import {
   createLvglGraphicsCallbacks,
   presentLvglRgb565,
 } from "/platform/desktop-web/lvgl-bridge.js";
+import { MaiaStreamBroker, bindShellStreams } from "/runtime/maia-streams.js";
 
 const screen = document.getElementById("screen");
 const status = document.getElementById("status");
@@ -42,17 +43,50 @@ const BROWSER_HOST_GRANTS = [
   "tty.input",
   "process.exit",
   "time.monotonic",
+  "stream.read",
+  "stream.write",
+  "stream.close",
 ];
 const runningProcesses = new Set();
+const streamBroker = new MaiaStreamBroker();
 const buttonOwners = new Map();
 let lvglModule = null;
 let graphicsCallbacks = null;
 let kernelProcess = null;
 let nextProcessId = 1;
 
+function setSimulatorState(state, text) {
+  document.body.dataset.state = state;
+  document.getElementById("runtime-state").textContent = text;
+  document.getElementById("run-app").disabled = state !== "ready";
+}
+
 function reportError(error) {
+  setSimulatorState("error", "Session error");
+  document.getElementById("developer-tools").open = true;
   status.textContent = `Startup error: ${error.message}`;
   console.error(error);
+}
+
+function configureFullscreen() {
+  const button = document.getElementById("fullscreen-button");
+  const device = document.getElementById("device");
+  button.disabled = !document.fullscreenEnabled;
+  if (button.disabled) button.title = "Full screen is not available in this browser";
+  button.addEventListener("click", async () => {
+    try {
+      if (document.fullscreenElement === device) await document.exitFullscreen();
+      else await device.requestFullscreen();
+      screen.focus();
+    } catch (error) {
+      document.getElementById("app-status").textContent = `Full screen unavailable: ${error.message}`;
+    }
+  });
+  document.addEventListener("fullscreenchange", () => {
+    const active = document.fullscreenElement === device;
+    button.textContent = active ? "Exit full screen" : "Full screen";
+    button.setAttribute("aria-pressed", String(active));
+  });
 }
 
 function keyboardTargetProcess() {
@@ -141,9 +175,11 @@ function routeLvglEvent(handle) {
 }
 
 function stopProcess(process, exitCode) {
-  if (!process?.running) return;
+  if (!process || process.stopped) return;
+  process.stopped = true;
   process.running = false;
   runningProcesses.delete(process);
+  process.host?.closeStreams();
   for (const [handle, owner] of buttonOwners) {
     if (owner === process) buttonOwners.delete(handle);
   }
@@ -182,17 +218,18 @@ async function createAppVfs(appId) {
   }
 }
 
-async function startProcess({ manifest, bytes, role, entryName, stepName }) {
+async function startProcess({ manifest, bytes, role, entryName, stepName, pid = nextProcessId++ }) {
   const module = await WebAssembly.compile(bytes);
   assertManifestCapabilities(module, manifest, BROWSER_HOST_GRANTS);
 
   const process = {
-    pid: nextProcessId++,
+    pid,
     appId: manifest.id,
     name: manifest.name ?? manifest.id,
     role,
     acceptsKeyboardInput: manifest.capabilities.includes("tty.input"),
     running: false,
+    stopped: false,
     windowHandle: -1,
     runtime: null,
     host: null,
@@ -202,6 +239,8 @@ async function startProcess({ manifest, bytes, role, entryName, stepName }) {
   process.host = createMaiaHostImports({
     graphics: processGraphics(process),
     vfs: process.vfs,
+    streams: streamBroker,
+    processId: process.pid,
     log: (level, message) => {
       status.textContent = message;
       (level >= 2 ? console.error : console.log)(
@@ -212,43 +251,73 @@ async function startProcess({ manifest, bytes, role, entryName, stepName }) {
     onProcessExit: (exitCode) => stopProcess(process, exitCode),
   });
 
-  const runtime = await instantiateNativeWasm(
-    module,
-    process.host.imports,
-    "browser",
-  );
-  process.host.attachInstance(runtime.instance);
-
-  const entry = runtime.exports[entryName];
-  if (typeof entry !== "function") {
-    throw new TypeError(
-      `Guest module is missing the '${entryName}' function export`,
-    );
-  }
-  if (process.stepExport && typeof runtime.exports[process.stepExport] !== "function") {
-    throw new TypeError(
-      `Guest module is missing the scheduler export '${process.stepExport}'`,
-    );
-  }
-
-  const memoryLimit = manifest.limits?.memoryPages;
-  const memoryPages = runtime.exports.memory?.buffer.byteLength / 65536;
-  if (Number.isInteger(memoryLimit) && memoryPages > memoryLimit) {
-    throw new RangeError(
-      `Guest memory (${memoryPages} pages) exceeds manifest limit (${memoryLimit})`,
-    );
-  }
-
-  process.runtime = runtime;
-  process.running = true;
-  runningProcesses.add(process);
   try {
+    const runtime = await instantiateNativeWasm(
+      module,
+      process.host.imports,
+      "browser",
+    );
+    process.host.attachInstance(runtime.instance);
+
+    const entry = runtime.exports[entryName];
+    if (typeof entry !== "function") {
+      throw new TypeError(
+        `Guest module is missing the '${entryName}' function export`,
+      );
+    }
+    if (process.stepExport && typeof runtime.exports[process.stepExport] !== "function") {
+      throw new TypeError(
+        `Guest module is missing the scheduler export '${process.stepExport}'`,
+      );
+    }
+
+    const memoryLimit = manifest.limits?.memoryPages;
+    const memoryPages = runtime.exports.memory?.buffer.byteLength / 65536;
+    if (Number.isInteger(memoryLimit) && memoryPages > memoryLimit) {
+      throw new RangeError(
+        `Guest memory (${memoryPages} pages) exceeds manifest limit (${memoryLimit})`,
+      );
+    }
+
+    process.runtime = runtime;
+    process.running = true;
+    runningProcesses.add(process);
     entry();
+    return process;
   } catch (error) {
     stopProcess(process, 1);
     throw error;
   }
-  return process;
+}
+
+async function startApplication({ manifest, bytes, entryName, stepName }) {
+  if (manifest.id !== "org.maiaplatform.shell") {
+    return startProcess({ manifest, bytes, entryName, stepName, role: "app" });
+  }
+  const response = await fetch("/apps/io/manifest.json");
+  if (!response.ok) throw new Error(`I/O manifest request failed: HTTP ${response.status}`);
+  const ioManifest = await response.json();
+  const ioRoot = new URL("/apps/io/", window.location.href);
+  const ioUrl = new URL(ioManifest.entry, ioRoot);
+  if (ioManifest.id !== "org.maiaplatform.io" || ioUrl.origin !== ioRoot.origin
+      || !ioUrl.pathname.startsWith(ioRoot.pathname)) throw new Error("Invalid I/O service package");
+  const ioResponse = await fetch(ioUrl);
+  if (!ioResponse.ok) throw new Error(`I/O guest request failed: HTTP ${ioResponse.status}`);
+  const ioBytes = await ioResponse.arrayBuffer();
+  const ioPid = nextProcessId++;
+  const shellPid = nextProcessId++;
+  bindShellStreams(streamBroker, ioPid, shellPid);
+  let ioProcess = null;
+  try {
+    ioProcess = await startProcess({ manifest: ioManifest, bytes: ioBytes, role: "service", pid: ioPid,
+      entryName: ioManifest.entryExport, stepName: ioManifest.stepExport });
+    if (!ioProcess.running) throw new Error("I/O guest exited during startup");
+    return await startProcess({ manifest, bytes, entryName, stepName, role: "app", pid: shellPid });
+  } catch (error) {
+    if (ioProcess) stopProcess(ioProcess, 1);
+    streamBroker.closeProcess(ioPid); streamBroker.closeProcess(shellPid);
+    throw error;
+  }
 }
 
 async function launchSelectedApp() {
@@ -275,16 +344,15 @@ async function launchSelectedApp() {
   if (!moduleResponse.ok) {
     throw new Error(`App module request failed: HTTP ${moduleResponse.status}`);
   }
-  const process = await startProcess({
+  const process = await startApplication({
     manifest,
     bytes: await moduleResponse.arrayBuffer(),
-    role: "app",
     entryName: manifest.entryExport,
     stepName: manifest.stepExport,
   });
   document.getElementById("app-status").textContent =
     `${process.name} running as PID ${process.pid}.`;
-  if (process.acceptsKeyboardInput) screen.focus();
+  if (process.acceptsKeyboardInput || manifest.id === "org.maiaplatform.shell") screen.focus();
 }
 
 async function loadAppCatalog() {
@@ -329,6 +397,7 @@ function sendPointer(module, event, pressed) {
 }
 
 async function boot() {
+  configureFullscreen();
   const manifestResponse = await fetch("/apps/kernel/kernel.json");
   if (!manifestResponse.ok) {
     throw new Error(
@@ -367,6 +436,7 @@ async function boot() {
   graphicsCallbacks = createLvglGraphicsCallbacks(lvglModule);
 
   document.getElementById("load-guest").addEventListener("click", () => {
+    setSimulatorState("starting", "Starting…");
     const input = document.getElementById("guest-file");
     const manifestInput = document.getElementById("guest-manifest");
     const entry = document.getElementById("entry-export").value.trim();
@@ -393,19 +463,24 @@ async function boot() {
         for (const process of [...runningProcesses]) stopProcess(process, -1);
         graphicsCallbacks.reset();
         buttonOwners.clear();
-        const process = await startProcess({
+        const options = {
           manifest,
           bytes: new Uint8Array(bytes),
           role,
           entryName: entry,
           stepName: step,
-        });
+        };
+        const process = role === "app" ? await startApplication(options) : await startProcess(options);
         kernelProcess = role === "kernel" ? process : null;
         if (role === "app") {
           document.getElementById("app-status").textContent =
             `${process.name} running as PID ${process.pid}.`;
+        } else {
+          document.getElementById("app-status").textContent =
+            "Kernel ready. Choose an application to begin.";
         }
         status.textContent = `${process.name} running in ${process.runtime.backendId}; LVGL-WASM callbacks active.`;
+        setSimulatorState("ready", "Ready");
       })
       .catch(reportError);
   });
@@ -429,6 +504,7 @@ async function boot() {
     sendPointer(lvglModule, event, false),
   );
   window.addEventListener("keydown", (event) => {
+    if (document.activeElement !== screen) return;
     if (routeKeyboardEvent(event)) return;
     if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault();
@@ -436,8 +512,9 @@ async function boot() {
     }
   });
   window.addEventListener("keyup", (event) => {
-    if (document.activeElement === screen && keyboardTargetProcess()) return;
+    if (document.activeElement !== screen || keyboardTargetProcess()) return;
     if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
       lvglModule._maiaos_lvgl_key(event.key === "Enter" ? 1 : 2, 0);
     }
   });

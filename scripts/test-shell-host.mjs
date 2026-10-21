@@ -15,6 +15,8 @@ import { assertManifestCapabilities } from "../runtime/maia-capabilities.js";
 import { MemoryVfsAdapter } from "../runtime/maia-vfs.js";
 import { createLvglGraphicsCallbacks } from "../platform/desktop-web/lvgl-bridge.js";
 
+import { MaiaStreamBroker, bindShellStreams } from "../runtime/maia-streams.js";
+
 const useLvgl = process.argv.includes("--lvgl");
 const trace = process.argv.includes("--trace");
 let lvgl = null;
@@ -42,8 +44,13 @@ const labels = new Map();
 let nextLabel = 1;
 let exitCode = null;
 const vfs = new MemoryVfsAdapter({ appId: manifest.id });
-const host = createMaiaHostImports({
-  vfs,
+const broker = new MaiaStreamBroker();
+bindShellStreams(broker, 2, 3);
+let ioExitCode = null;
+const ioManifest = JSON.parse(await readFile(new URL("../apps/io/manifest.json", import.meta.url), "utf8"));
+const ioHost = createMaiaHostImports({
+  streams: broker, processId: 2,
+  vfs: new MemoryVfsAdapter({appId: ioManifest.id, maxOpenFiles: 0}),
   graphics: {
     windowCreate: (title) => (windowHandle = realGraphics ? realGraphics.windowCreate(title) : 1),
     labelCreate: (_parent, text) => {
@@ -60,45 +67,66 @@ const host = createMaiaHostImports({
     objectDestroy: () => 0,
   },
   onProcessExit: (code) => {
-    exitCode = code;
+    ioExitCode = code;
     if (realGraphics && windowHandle >= 0) realGraphics.objectDestroy(windowHandle);
   },
 });
+const io = await instantiateNativeWasmFile(new URL("../apps/io/io.wasm", import.meta.url), ioHost.imports);
+assertManifestCapabilities(io.module, ioManifest, ioManifest.capabilities);
+assert.ok(WebAssembly.Module.imports(io.module).every(({module}) => module !== "maia.vfs"));
+ioHost.attachInstance(io.instance);
+const host = createMaiaHostImports({ vfs, graphics: Object.fromEntries(["windowCreate", "labelCreate", "labelSetText", "buttonCreate", "objectDestroy"].map(name => [name, () => { throw new Error("Shell must not call graphics"); }])), streams: broker, processId: 3,
+  onProcessExit: (code) => { exitCode = code; } });
 const guest = await instantiateNativeWasmFile(wasmPath, host.imports);
-assertManifestCapabilities(guest.module, manifest, [
-  "memory.alloc",
-  "memory.free",
-  "gfx.window",
-  "gfx.label",
-  "gfx.label.set_text",
-  "events.poll",
-  "tty.input",
-  "vfs.open",
-  "vfs.read",
-  "vfs.close",
-  "process.exit",
-]);
+assertManifestCapabilities(guest.module, manifest, manifest.capabilities);
+assert.ok(WebAssembly.Module.imports(guest.module).every(({module}) => !["maia.gfx", "maia.events"].includes(module)));
+assert.throws(() => assertManifestCapabilities(guest.module, manifest,
+  manifest.capabilities.filter((capability) => capability !== "stream.write")), /Host policy denies/);
+assert.throws(() => assertManifestCapabilities(guest.module,
+  {...manifest, capabilities: manifest.capabilities.filter((capability) => capability !== "stream.read")},
+  manifest.capabilities), /Manifest does not request/);
 host.attachInstance(guest.instance);
-assert.equal(guest.exports.maia_app_start instanceof Function, true);
-assert.equal(guest.exports.maiaos_step instanceof Function, true);
-guest.exports.maia_app_start();
-if (trace) console.log("TRACE shell started");
-if (lvgl) {
-  for (let tick = 0; tick < 8; ++tick) lvgl._maiaos_lvgl_tick();
-  assert.ok(flushCount > 0, "Actual LVGL must rasterize the shell window");
+// The real kernel stays scheduled while terminal I/O and parsing run in separate memories.
+const kernelManifest = JSON.parse(await readFile(new URL("../apps/kernel/kernel.json", import.meta.url), "utf8"));
+let kernelHandle = 1000;
+const kernelHost = createMaiaHostImports({
+  vfs: new MemoryVfsAdapter({appId: kernelManifest.id}),
+  graphics: realGraphics ?? {windowCreate: () => kernelHandle++, labelCreate: () => kernelHandle++,
+    labelSetText: () => 0, buttonCreate: () => kernelHandle++, objectDestroy: () => 0},
+});
+const kernel = await instantiateNativeWasmFile(new URL("../platform/desktop-web/generated/kernel.wasm", import.meta.url), kernelHost.imports);
+assertManifestCapabilities(kernel.module, kernelManifest, kernelManifest.capabilities);
+kernelHost.attachInstance(kernel.instance);
+kernel.exports[kernelManifest.entryExport]();
+let kernelSteps = 0;
+const kernelStack = kernel.exports.__stack_ptr.value;
+function pump(count = 3) {
+  for (let tick = 0; tick < count; ++tick) {
+    kernel.exports[kernelManifest.stepExport](); ++kernelSteps;
+    if (ioExitCode === null) io.exports.maiaos_step();
+    if (exitCode === null) guest.exports.maiaos_step();
+    if (lvgl) lvgl._maiaos_lvgl_tick();
+  }
 }
+io.exports.maia_io_start();
+guest.exports.maia_app_start();
+pump(8);
+const ioPages = io.exports.memory.buffer.byteLength / 65536;
+const ioStack = io.exports.__stack_ptr.value;
+assert.ok(ioPages <= ioManifest.limits.memoryPages);
+assert.notEqual(io.exports.memory, guest.exports.memory);
+assert.notEqual(kernel.exports.memory, guest.exports.memory);
+if (lvgl) assert.ok(flushCount > 0, "Actual LVGL must rasterize the session");
 
 const [outputHandle, inputHandle] = [...labels.keys()];
 function pressKey(key, data0 = 0) {
-  assert.equal(host.enqueueEvent({
+  assert.equal(ioHost.enqueueEvent({
     type: MAIA_EVENT_KEY,
     objectHandle: 0,
     data0,
     data1: key,
   }), 0);
-  guest.exports.maiaos_step();
-  // Match the platform scheduler: advance LVGL while delivering guest events.
-  if (lvgl) lvgl._maiaos_lvgl_tick();
+  pump();
 }
 function typeText(text) {
   for (const character of text) pressKey(MAIA_KEY_TEXT, character.charCodeAt(0));
@@ -106,6 +134,7 @@ function typeText(text) {
 function submitText(text) {
   typeText(text);
   pressKey(MAIA_KEY_ENTER);
+  pump(24);
 }
 
 assert.equal(labels.get(inputHandle), "maia> |", "Prompt and caret share one LVGL label");
@@ -185,4 +214,12 @@ submitText("exit");
 const output = labels.get(outputHandle);
 assert.equal(output, "maia> exit\n");
 assert.equal(exitCode, 0);
-console.log(`Shell guest passed${lvgl ? ` with actual LVGL (${flushCount} flushes)` : " with host callbacks"}: generated lexer/parser, commands, quoting, invalid/unsupported input, bounds, 1000 repeated parses, stable stack/memory (${initialPages} pages).`);
+assert.equal(ioExitCode, 0);
+assert.deepEqual(broker.stats, {pipes: 0, endpoints: 0, capacityBytes: 0, bufferedBytes: 0});
+assert.equal(vfs.handles.size, 0);
+assert.equal(io.exports.__stack_ptr.value, ioStack);
+assert.equal(io.exports.memory.buffer.byteLength / 65536, ioPages);
+assert.equal(kernel.exports.__stack_ptr.value, kernelStack);
+assert.ok(kernelSteps > 1000);
+const stepsAtExit = kernelSteps; pump(5); assert.equal(kernelSteps, stepsAtExit + 5);
+console.log(`Kernel/I/O/shell session passed${lvgl ? ` with actual LVGL (${flushCount} flushes)` : " with host callbacks"}: generated lexer/parser, commands, quoting, invalid/unsupported input, bounds, 1000 repeated parses, stable stack/memory (shell ${initialPages}, I/O ${ioPages} pages), ${kernelSteps} kernel steps, drained/closed streams.`);

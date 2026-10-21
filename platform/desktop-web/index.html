@@ -3,43 +3,74 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MaiaOS Browser Host</title>
+    <meta name="color-scheme" content="dark" />
+    <title>MaiaOS · Simulator</title>
     <link rel="stylesheet" href="/platform/desktop-web/style.css" />
   </head>
-  <body>
-    <header>
-      <b>MAIA<span>OS</span></b>
-      <small
-        >LVGL-WASM image callback · Native browser WASM reference runtime</small
-      >
-    </header>
-    <main>
-      <canvas
-        id="screen"
-        width="1280"
-        height="720"
-        tabindex="0"
-        aria-label="LVGL-rendered MaiaOS guest display"
-      ></canvas>
-    </main>
-    <footer>
-      <label for="app-select">Applications</label>
-      <select id="app-select">
-        <option value="">Loading catalog…</option>
-      </select>
-      <button id="run-app" type="button">Run app</button>
-      <span id="app-status">Kernel launcher ready</span>
-      <label for="guest-file">Guest module</label>
-      <input id="guest-file" type="file" accept=".wasm,application/wasm" />
-      <label for="guest-manifest">Guest manifest</label>
-      <input id="guest-manifest" type="file" accept=".json,application/json" />
-      <label for="entry-export">Entry export</label>
-      <input id="entry-export" value="maiaos_start" autocomplete="off" />
-      <label for="step-export">Step export</label>
-      <input id="step-export" value="maiaos_step" autocomplete="off" />
-      <button id="load-guest" type="button">Load guest</button>
-      <span id="status">Loading LVGL host and guest WASM…</span>
-    </footer>
+  <body data-state="starting">
+    <div class="workspace">
+      <header class="workspace-header">
+        <div class="identity">
+          <span class="wordmark">MAIA<span>OS</span></span>
+          <span class="identity-divider" aria-hidden="true"></span>
+          <div class="workspace-title">
+            <h1>Simulator</h1>
+            <p>Your MaiaOS development workspace</p>
+          </div>
+        </div>
+        <span id="runtime-state" class="runtime-state" role="status">Starting…</span>
+      </header>
+
+      <main>
+        <section class="session" aria-label="Simulator session">
+          <div class="session-toolbar">
+            <div class="app-launcher">
+              <label for="app-select">Application</label>
+              <select id="app-select">
+                <option value="">Loading applications…</option>
+              </select>
+              <button id="run-app" class="button-primary" type="button" disabled>Run app</button>
+            </div>
+            <button id="fullscreen-button" class="button-secondary" type="button" aria-pressed="false" disabled>
+              Full screen
+            </button>
+          </div>
+          <p id="app-status" class="session-message" role="status">Preparing the session…</p>
+
+          <div id="device" class="device">
+            <div class="device-top" aria-hidden="true">
+              <span class="device-brand">TAB5</span>
+              <span class="camera"></span>
+              <span class="device-resolution">1280 × 720</span>
+            </div>
+            <div class="device-screen">
+              <canvas id="screen" width="1280" height="720" tabindex="0"
+                aria-label="MaiaOS display rendered by LVGL; click to use the keyboard"
+                aria-describedby="display-help"></canvas>
+            </div>
+            <div class="device-bottom" aria-hidden="true"><span></span></div>
+          </div>
+          <p id="display-help" class="display-help">Click the display to use your keyboard. Touch and pointer input are also available.</p>
+        </section>
+
+        <details id="developer-tools" class="developer-tools">
+          <summary><span>Developer tools</span><span class="summary-note">Load a WASM module</span></summary>
+          <div class="developer-content">
+            <p class="tools-description">Load a module and its manifest to replace the current session.</p>
+            <div class="module-fields">
+              <div class="field"><label for="guest-file">WASM module</label><input id="guest-file" type="file" accept=".wasm,application/wasm" /></div>
+              <div class="field"><label for="guest-manifest">Manifest</label><input id="guest-manifest" type="file" accept=".json,application/json" /></div>
+              <div class="field"><label for="entry-export">Entry export</label><input id="entry-export" value="maiaos_start" autocomplete="off" spellcheck="false" /></div>
+              <div class="field"><label for="step-export">Step export</label><input id="step-export" value="maiaos_step" autocomplete="off" spellcheck="false" /></div>
+            </div>
+            <div class="developer-actions"><button id="load-guest" class="button-secondary" type="button">Load guest</button></div>
+            <p id="status" class="diagnostic-message" role="status">Loading LVGL and the kernel…</p>
+            <p class="reference-note">Browser-native WebAssembly reference runtime · LVGL renders the display</p>
+          </div>
+        </details>
+      </main>
+      <footer class="workspace-footer"><span>Maia Suite</span><span>Local simulator · Device integration in development</span></footer>
+    </div>
     <script type="module" src="/platform/desktop-web/main.js"></script>
   </body>
 </html>

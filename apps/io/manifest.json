@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "org.maiaplatform.io",
+  "name": "Maia I/O",
+  "version": "0.1.0",
+  "entry": "io.wasm",
+  "entryExport": "maia_io_start",
+  "stepExport": "maiaos_step",
+  "abi": "maiaos-0",
+  "wasmProfile": "maiaos-embedded-v0",
+  "capabilities": [
+    "gfx.window", "gfx.label", "gfx.label.set_text", "events.poll", "tty.input",
+    "stream.read", "stream.write", "stream.close", "process.exit"
+  ],
+  "limits": { "memoryPages": 8, "openFiles": 0 }
+}

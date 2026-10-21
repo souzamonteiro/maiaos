@@ -17,6 +17,9 @@
     "test:shell-host": "node scripts/test-shell-host.mjs",
     "test:shell-lvgl": "node scripts/test-shell-host.mjs --lvgl",
     "test:lvgl-host": "node scripts/test-lvgl-host.mjs",
-    "demo": "node platform/desktop-web/server.js"
+    "demo": "node platform/desktop-web/server.js",
+    "build:io": "node scripts/build-io-wasm.mjs",
+    "test:io-streams": "node scripts/test-io-streams.mjs",
+    "test:shell-boot": "node scripts/test-shell-boot.mjs"
   }
 }

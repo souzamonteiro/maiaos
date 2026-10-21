@@ -2,6 +2,123 @@
 
 ## Current objective/result
 
+### Approved release synchronization + real shell/I/O slice — 2026-10-20
+
+Owner approved the concrete stream/I/O proposal in
+`docs/planning/SHELL_IO_VERTICAL_SLICE.md`, including additive stream imports,
+capabilities, CLOSED(-8), actual C++98 I/O and the shell responsibility split.
+Owner separately authorized recording/pushing the already-staged MaiaC1.6.0
+release metadata and synchronizing MaiaCpp/MaiaJS/MaiaOS pins. That publication
+scope originally excluded new UI/I/O code. The owner subsequently explicitly
+authorized committing and pushing the entire listed MaiaOS change set (2026-10-20).
+That later authorization now covers this simulator/I/O integration publication;
+it does not authorize an npm release or version bump.
+
+Published main commits, confirmed by live `git ls-remote origin refs/heads/main`:
+- MaiaC32ebd46879e640d605ef8f56a21656d86a521ecd: package1.6.0, CC/WASM pins.
+- MaiaCpp09db55c27dbade0fafa5dcb8af6f325558c60df6: only MaiaC gitlink.
+- MaiaJSd5440b45d7919512c4e5b99038dfb0b93156aff9: only C/Cpp gitlinks.
+- MaiaOS37e14b04a0b2c3711a684f033462fb3bf246ecc0: only MaiaCpp gitlink.
+Principal Regexb66a74b, CC1c7bbc5, WASM7d82e4a, SQLb54bd26 unchanged.
+All seven principal dependencies clean; only MaiaOS feature work is dirty.
+All recursive checkouts match their recorded pins: C7, Cpp15, JS31, OS17.
+All70 recursive gitlinks across these four consumers are ancestors of their
+respective intended `origin/main` refs. No npm publication, further version bump,
+history rewrite, stash or destructive synchronization was performed.
+
+Automatic approval review REJECTED `./git_pull.sh` in MaiaCpp: it would perform
+broad pulls/recursive --remote updates beyond the authorized pointer change.
+User was informed. Safe alternative was explicitly fetching the intended origin
+with `--no-recurse-submodules`, checking out exact published commits without
+force, then committing only scoped pointers in dependency order. This succeeded;
+there is no remaining approval blocker. Report this rejection/resolution briefly
+in final, as required by developer instructions.
+
+Publication validation: MaiaC `npm test` (43 groups) + `npm run compile:example`;
+MaiaCpp `npm test`; MaiaJS `npm run test:full`; all PASS. Test-generated tracked
+C/JS example outputs were backed up then restored to exact HEAD bytes, preserving
+owner changes. Backups: `/var/folders/6p/871hys095mq5mm7078sqplx40000gn/T/maiac-160-test-generated-mym56n7b`
+and `maiajs-160-test-generated-hzizpff3` under the same temporary root. The clean
+published OS baseline was tested independently in ignored
+`build/release-baseline-160-qe_5uyhy`: unit, shell-LVGL and kernel/Calculator/Clock
+PASS. Logs `/tmp/maia-release-160-{maiac-tests,maiac-example,maiacpp-tests,maiajs-tests}.log`.
+Pre-publication index/diff snapshots: temporary `maia-release-160-before-sync-hil7xyqo`.
+
+Feature implementation included in the authorized MaiaOS publication:
+- Simulator host layout: compact app toolbar, responsive bezel around the same
+  1280x720 LVGL canvas, truthful runtime state, native fullscreen, collapsed
+  diagnostics/custom-module controls, accessible focus. External controls keep
+  Enter/Tab; no DOM OS widgets or alternate renderer. Three keyboard regressions.
+- `runtime/maia-streams.js`: bounded copied-byte FIFO, process-local handles,
+  quotas, partial transfers/backpressure, EOF/CLOSED, aliases and cleanup.
+  `maia-host-imports.js` validates entire guest buffers before transfer and closes
+  owned streams on exit; capabilities map exact stream imports.
+- `apps/io/io.cpp`, manifest, README, `io.wasm` (21531 bytes): real C++98 guest
+  owns LVGL terminal, ASCII canonical editing/history/caret and incremental UTF-8
+  output decoding. Shell prompt remains shell-generated. Clear/home only.
+- Shell now owns parsing/commands/VFS + stdin/stdout/stderr streams. It imports no
+  gfx/events. Existing generated EBNF lexer/parser and bounded tree/word validation
+  remain unchanged. Cat resumes across steps and cannot overrun output queues.
+  `shell.wasm` is1185253 bytes. Builds use pinned MaiaCpp -> C89 -> MaiaC/WASM;
+  optional Clang checks emitted C89 only, never builds the guest.
+- Actual browser boot functions bind stdin0, stdout1, stderr2 against I/O3/4/5,
+  then start I/O + shell in isolated memories while kernel remains scheduled.
+  Stdout/stderr share an ordered terminal pipe via aliases, preventing prompt/error
+  reordering. Startup failure/trap/exit cleans endpoints and I/O windows.
+  I/O observes output EOF and renders final bytes before accepting further keys;
+  this avoids a reproduced pending-Enter close race.
+
+Verification PASS:
+- `npm run build:io -- --check-c89`; `npm run build:shell -- --check-c89`.
+- `npm test`:30 tests, including copied buffers/canaries, ownership, bounds,
+  quotas, ring wrap, aliases, atomic boot rollback, peer closure and cleanup.
+- `npm run test:io-streams`: actual I/O/shell WASM, fragmented UTF-8 and clear,
+  long UTF-8 live-line bounds, EOF with queued Enter, canonical-input pressure,
+  closed peer,18000-byte VFS cat through31-byte ring, unterminated stdin EOF,
+  oversized-input recovery,25 clean fresh-guest sessions on one reused broker.
+- `npm run test:shell-host` and `npm run test:shell-lvgl`: actual kernel/I/O/shell,
+  all six commands, quotes/comments/errors/unsupported/bounds, editing/history,
+  inline caret,1000 repeats. Shell18 pages + I/O2 pages, stable stacks/memories,
+  67969 kernel steps, all streams/VFS handles drained/closed. Latest real LVGL
+  run2046 RGB565 flushes (time-dependent count).
+- `npm run test:shell-boot`: actual production startup/cleanup functions evaluated
+  in a Node reference harness with real guest WASM + real LVGL; failed I/O/shell
+  startup cleanup and25 launch/exits with zero surviving windows/endpoints.
+- `npm run test:lvgl-host`: kernel/Calculator/Clock still PASS.
+- `npm run test:shell-equivalence`:5356 raw inputs,2400 accepted,2136 syntax,
+  820 lexical errors, zero JS/native C++98/WASM differences in exact tokens,
+  UTF-16 offsets and complete accepted trees; restored stack.
+- JS syntax, diff whitespace checks; local HTTP200 for UI/main/CSS/stream runtime,
+  I/O manifest and both guest WASM files. Served WASM bytes match local artifacts.
+Logs `/tmp/maia-stream-{unit,guests,session-host,session-lvgl,boot,other-apps,equivalence}.log`,
+`/tmp/maia-io-build.log`, `/tmp/maia-stream-shell-build.log`.
+
+Browser visual/fullscreen/touch smoke is UNRUN. Browser skill setup/troubleshooting
+retried; `agent.browsers.list()` returns[]. Do not use an unrelated backend or
+claim screenshots/browser interaction. The running server atlocalhost:8080 serves
+new files; owner can refresh, select Maia Shell and run it. The Node production
+boot-function harness is explicitly not browser interaction verification.
+
+Known limits: ASCII input/one-line history; terminal history resets at4096 bytes;
+no general ANSI terminal, process spawn, general pipelines, POSIX conformance,
+directory enumeration/cwd commands, native-device streams, MaiaWASMVM/fuel or
+runtime memory enforcement. Dense Regex memo clearing remains measured but not
+fixed; do not mix a Regex rewrite into this slice. Device work remains deferred.
+No source changes were needed in principal compilers for this milestone.
+
+Publication checks were rerun before committing: unit tests, actual stream guests,
+kernel/I/O/shell with real LVGL, actual boot lifecycle and kernel/Calculator/Clock
+regressions. Logs: `/tmp/maiaos-publication-*.log`. Git publication is now explicitly
+authorized; the final chat report records its resulting commit and push outcome.
+No compiler code, toolchain pins, release versions or npm packages change here.
+
+Next safe action: owner reviews the refreshed simulator visually.
+Then specify directory enumeration + shell-local cwd for ls/cd before implementing
+those public VFS additions. Preserve all local feature changes and sources.
+
+Historical sections below record earlier milestones; they are superseded where
+this current section describes the approved I/O boundary and current commit IDs.
+
 ### Inline shell prompt/caret correction — 2026-10-20
 
 Owner opened the integrated-browser simulator and reported the caret below the

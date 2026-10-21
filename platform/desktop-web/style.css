@@ -1,107 +1,97 @@
-* {
-  box-sizing: border-box;
+:root {
+  color-scheme: dark;
+  --background: #0e1217;
+  --panel: #171d24;
+  --border: #2b343f;
+  --text: #e6ecef;
+  --muted: #98a5b3;
+  --accent: #83d8b8;
+  font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--background);
 }
 
-body {
-  margin: 0;
-  background: #10171c;
-  color: #e6f3ee;
-  font:
-    14px system-ui,
-    sans-serif;
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select { font: inherit; }
+button, select, summary { cursor: pointer; }
+button, input, select {
+  min-height: 40px;
+  padding: 8px 12px;
+  color: var(--text);
+  background: #11171e;
+  border: 1px solid #3b4755;
+  border-radius: 7px;
 }
-
-header,
-footer {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 14px 24px;
-  background: #1b252b;
-}
-
-footer {
-  flex-wrap: wrap;
-}
-
-header b {
-  font-size: 22px;
-  letter-spacing: 2px;
-}
-
-header b span {
-  color: #58c5a0;
-}
-
-header small {
-  color: #a3b8b3;
-}
-
-main {
-  display: flex;
-  justify-content: center;
-  padding: 24px;
-}
-
-/* This canvas is only the pixel sink for LVGL's RGB565 flush callback. */
-canvas {
-  width: min(100%, 1280px);
-  height: auto;
-  aspect-ratio: 16 / 9;
-  border: 1px solid #3e5d59;
-  box-shadow: 0 20px 50px #0008;
-  touch-action: none;
-}
-
-#status {
-  min-height: 1.5em;
-  color: #c3d2cc;
-}
-
-input,
-select,
-select,
-button {
-  min-height: 38px;
-  border: 1px solid #45635c;
-  border-radius: 4px;
-  padding: 7px 10px;
-  background: #202e33;
-  color: #e6f3ee;
-}
-
-button {
-  background: #286d5b;
-  cursor: pointer;
-}
-
-button:hover {
-  background: #358a70;
-}
-
-#entry-export,
-#step-export {
-  width: 150px;
-}
-
-#app-select {
-  min-width: 170px;
-}
-
-#app-status {
-  min-height: 1.5em;
-  color: #9edcc8;
-}
+button { font-weight: 600; white-space: nowrap; }
+button:disabled { opacity: 0.45; cursor: default; }
+button:not(:disabled):hover { border-color: var(--accent); background: #23312e; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.workspace { max-width: 1440px; margin: 0 auto; padding: 28px 36px 16px; }
+.workspace-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+.identity { display: flex; align-items: center; gap: 22px; }
+.wordmark { font-size: 23px; font-weight: 750; letter-spacing: 0.04em; }
+.wordmark > span { color: var(--accent); }
+.identity-divider { height: 30px; width: 1px; background: var(--border); }
+h1 { margin: 0; font-size: 17px; font-weight: 600; }
+.workspace-title p { margin: 1px 0 0; font-size: 12px; color: var(--muted); }
+.runtime-state { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 12px; color: var(--muted); }
+.runtime-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #b8a16a; }
+body[data-state="ready"] .runtime-state::before { background: var(--accent); }
+body[data-state="error"] .runtime-state { color: #f0aaaa; }
+body[data-state="error"] .runtime-state::before { background: #f0aaaa; }
+.session-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.app-launcher { display: flex; align-items: center; gap: 10px; }
+.app-launcher label { margin-right: 4px; font-size: 12px; color: var(--muted); }
+#app-select { min-width: 200px; max-width: 340px; }
+.button-primary { background: var(--accent); color: #10251e; border-color: var(--accent); }
+.button-primary:not(:disabled):hover { background: #a3e6cc; color: #10251e; }
+.button-secondary { background: var(--panel); }
+.session-message { min-height: 1.5em; margin: 10px 0 16px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.device { padding: 0 18px; background: #242b33; border: 1px solid #424c58; border-radius: 25px; box-shadow: 0 16px 48px #0005, inset 0 1px 0 #ffffff0a; }
+.device-top { height: 36px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; color: #a7b0ba; }
+.device-brand { font-size: 9px; font-weight: 700; letter-spacing: 0.14em; }
+.camera { width: 7px; height: 7px; border: 2px solid #0c1015; border-radius: 50%; background: #394652; box-shadow: 0 0 0 2px #303944; }
+.device-resolution { justify-self: end; font-size: 9px; letter-spacing: 0.04em; }
+.device-screen { background: #090d10; border: 1px solid #11171c; border-radius: 8px; overflow: hidden; }
+/* The display remains only a pixel sink for actual LVGL RGB565 flushes. */
+#screen { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; touch-action: none; }
+#screen:focus-visible { outline-offset: -3px; }
+.device-bottom { height: 21px; display: flex; justify-content: center; align-items: center; }
+.device-bottom span { display: block; height: 2px; width: 38px; background: #46515e; border-radius: 2px; }
+.display-help { margin: 14px 0 24px; text-align: center; color: var(--muted); font-size: 12px; }
+.developer-tools { border: 1px solid var(--border); border-radius: 9px; background: var(--panel); }
+.developer-tools summary { padding: 14px 18px; font-size: 13px; font-weight: 600; }
+.summary-note { margin-left: 14px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.developer-content { padding: 0 18px 18px; border-top: 1px solid var(--border); }
+.tools-description, .diagnostic-message { margin: 14px 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.module-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.field { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.field label { color: var(--muted); font-size: 12px; }
+.field input { width: 100%; min-width: 0; }
+input::file-selector-button { border: 0; border-radius: 4px; padding: 4px 8px; margin-right: 10px; font: inherit; background: #2c3744; color: var(--text); cursor: pointer; }
+.developer-actions { margin-top: 16px; }
+.reference-note { margin: 14px 0 0; font-size: 11px; color: var(--muted); }
+.workspace-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding-top: 18px; font-size: 11px; color: var(--muted); }
+.device:fullscreen { display: flex; flex-direction: column; justify-content: center; height: 100%; width: 100%; padding: 0 20px; border: 0; border-radius: 0; background: #0e1217; }
+.device:fullscreen .device-screen { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; border: 0; }
+.device:fullscreen #screen { width: auto; height: auto; max-width: 100%; max-height: 100%; }
 
 @media (max-width: 700px) {
-  header,
-  footer {
-    flex-wrap: wrap;
-    padding: 12px;
-  }
-
-  main {
-    padding: 10px 0;
-  }
-
+  .workspace { padding: 18px 14px 14px; }
+  .workspace-header { margin-bottom: 22px; gap: 12px; }
+  .identity { gap: 12px; }
+  .wordmark { font-size: 20px; }
+  .workspace-title p, .identity-divider { display: none; }
+  .session-toolbar { align-items: flex-start; }
+  .app-launcher { flex-wrap: wrap; gap: 8px; flex: 1; min-width: 0; }
+  .app-launcher label { width: 100%; }
+  #app-select { min-width: 0; width: 100%; max-width: none; }
+  #fullscreen-button { margin-top: 26px; }
+  .device { border-radius: 15px; padding: 0 8px; }
+  .device-top { height: 26px; }
+  .device-bottom { height: 15px; }
+  .display-help { text-align: left; }
+  .module-fields { grid-template-columns: 1fr; }
+  .summary-note { display: block; margin: 4px 0 0 18px; }
 }

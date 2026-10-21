@@ -78,12 +78,12 @@ flowchart TB
 | MaiaOS native boot host / Tab5 firmware | Planned | Initializes MaiaWASMVM, drivers, recovery and host imports. |
 | Browser boot coordinator | Implemented | `platform/desktop-web/main.js`; it starts the kernel and catalog apps using the native browser WASM reference engine. A separate `bootloader.js` is not present. |
 | `kernel.wasm` | Implemented | C++98 guest built through MaiaCpp -> MaiaC; uses the `maia.*` ABI. |
-| `io.wasm` | Planned | Future guest/service boundary for TTY and I/O; no module source or build target exists yet. |
-| `shell.wasm` | Bounded MVP (2026-10-20) | MaiaCC-generated C++98 lexer/parser integrated into the guest; six simple commands via existing LVGL/events/VFS syscalls. Compound execution/POSIX conformance remain future work. |
+| `io.wasm` | Bounded reference implementation (2026-10-20) | C++98 LVGL terminal and canonical keyboard editing over bounded streams; `npm run build:io`. |
+| `shell.wasm` | Bounded MVP (2026-10-20) | MaiaCC-generated C++98 lexer/parser integrated into the guest; six simple commands via streams/VFS; I/O owns LVGL/events. Compound execution/POSIX conformance remain future work. |
 | `desktop.wasm` | Planned | Future graphical desktop/session guest; it is distinct from the current LVGL-WASM browser platform module. |
 | Calculator and Clock `app.wasm` | Implemented | C++98 example apps built through MaiaCpp -> MaiaC and launched with manifests. |
 
-The intended system layering is platform boot host -> `kernel.wasm` -> I/O service (`io.wasm`) -> command shell (`shell.wasm`) and graphical desktop (`desktop.wasm`). This is a target decomposition, not a claim that the planned guests are already implemented or that their final IPC/boot protocol is frozen.
+The intended system layering is platform boot host -> `kernel.wasm` -> I/O service (`io.wasm`) -> command shell (`shell.wasm`) and graphical desktop (`desktop.wasm`). The reference simulator now starts the kernel plus I/O/shell guests with the approved bounded stream ABI; desktop, native-device boot and general IPC/process management remain planned. See [ABI v0](specifications/abi-v0.md) and [the implemented vertical slice](planning/SHELL_IO_VERTICAL_SLICE.md).
 
 ## 4. Boot and recovery
 

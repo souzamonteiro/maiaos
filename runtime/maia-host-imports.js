@@ -1,9 +1,13 @@
+import { STREAM_MAX_COPY } from "./maia-streams.js";
+
 const STATUS = Object.freeze({
   OK: 0,
   INVALID_ARGUMENT: -1,
+  PERMISSION_DENIED: -3,
   OUT_OF_MEMORY: -4,
   WOULD_BLOCK: -6,
   INVALID_HANDLE: -7,
+  CLOSED: -8,
 });
 const EVENT_PACKET_VERSION = 1;
 const EVENT_PACKET_BYTES = 24;
@@ -57,6 +61,8 @@ export function createMaiaHostImports({
   graphics,
   vfs,
   tty = null,
+  streams = null,
+  processId = null,
   log = () => {},
   monotonicMs = () => globalThis.performance.now(),
   onProcessExit = () => {},
@@ -83,6 +89,10 @@ export function createMaiaHostImports({
     (typeof tty.pollLine !== "function" || typeof tty.write !== "function")
   ) {
     throw new TypeError("TTY must provide pollLine and write callbacks");
+  }
+  if (streams && (!Number.isInteger(processId) || processId <= 0
+      || ["read", "write", "close", "closeProcess"].some(name => typeof streams[name] !== "function"))) {
+    throw new TypeError("Streams require a broker and positive process identity");
   }
 
   let guestMemory = null;
@@ -214,12 +224,36 @@ export function createMaiaHostImports({
       },
     },
     "maia.process": {
-      exit: (exitCode) => onProcessExit(exitCode),
+      exit: (exitCode) => {
+        if (streams) streams.closeProcess(processId);
+        onProcessExit(exitCode);
+      },
     },
     "maia.time": {
       monotonic_ms: () => BigInt(Math.max(0, Math.trunc(monotonicMs()))),
     },
   };
+
+  if (streams) {
+    imports["maia.stream"] = {
+      read: (handle, pointer, capacity) => {
+        if (!Number.isInteger(capacity) || capacity < 0 || capacity > STREAM_MAX_COPY) return STATUS.INVALID_ARGUMENT;
+        try { validateGuestRange(guestMemory, pointer, capacity); }
+        catch { return STATUS.INVALID_ARGUMENT; }
+        const result = streams.read(processId, handle, capacity);
+        if (typeof result === "number") return result;
+        new Uint8Array(guestMemory.buffer, pointer, result.length).set(result);
+        return result.length;
+      },
+      write: (handle, pointer, length) => {
+        if (!Number.isInteger(length) || length < 0 || length > STREAM_MAX_COPY) return STATUS.INVALID_ARGUMENT;
+        try { validateGuestRange(guestMemory, pointer, length); }
+        catch { return STATUS.INVALID_ARGUMENT; }
+        return streams.write(processId, handle, new Uint8Array(guestMemory.buffer, pointer, length));
+      },
+      close: handle => streams.close(processId, handle),
+    };
+  }
 
   if (tty) {
     imports["maia.tty"] = {
@@ -297,6 +331,9 @@ export function createMaiaHostImports({
     },
     get queuedEventCount() {
       return eventQueue.length;
+    },
+    closeStreams() {
+      if (streams) streams.closeProcess(processId);
     },
   });
 }

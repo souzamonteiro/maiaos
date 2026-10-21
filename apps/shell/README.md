@@ -41,47 +41,59 @@ The test runner reads this exact `maia-shell.ebnf` file and regenerates a tempor
 
 ## Current MVP behavior
 
-The Shell is launched as a normal app guest from the browser app catalog. The browser host instantiates guests, schedules their step exports, enforces manifest capabilities, provides the VFS and LVGL callbacks, and forwards keyboard events to the focused shell guest. The prompt, output, editable line, and caret are LVGL labels created by the guest. There is no HTML input or Send button for shell commands. A separate `io.wasm` is not required for this slice.
+The browser launches a real `io.wasm` service alongside `shell.wasm` while
+`kernel.wasm` keeps stepping. Every guest has a separate linear memory. The I/O
+service owns its LVGL window, terminal output, keyboard editing, caret and
+one-line history. The shell generates prompt bytes, parses with the generated
+C++98 lexer/parser and executes commands/VFS operations.
 
-The guest uses these imported system calls:
-
-| Import | MVP behavior |
+| Guest | Imports / responsibility |
 |---|---|
-| `maia.gfx.window_create(title_ptr, title_len)` | Create the shell's LVGL window. |
-| `maia.gfx.label_create(parent, text_ptr, text_len)` | Create output and command-line labels inside that window. |
-| `maia.gfx.label_set_text(label, text_ptr, text_len)` | Draw guest-generated prompt, output, and caret text. |
-| `maia.events.poll(packet_ptr, capacity)` | Read versioned events. The host sends keyboard packets with printable ASCII in `data0` and the key identifier in `data1`: Enter, arrows, Home/End, Backspace, Delete, and Up/Down. |
-| `maia.vfs.open/read/close` | Read `/system/welcome.txt` for `cat`. |
-| `maia.process.exit(status)` | Exit the shell guest cleanly. |
+| I/O | `maia.gfx.window_create/label_create/label_set_text`, `maia.events.poll`, `maia.stream.read/write/close`, `maia.process.exit` |
+| Shell | `maia.stream.read/write/close`, `maia.vfs.open/read/close`, `maia.process.exit`, toolchain memory/allocator support |
 
-The host forwards keys only while the LVGL screen has focus. The guest owns the editable line, cursor, and one-line history, and executes on Enter; it never blocks the browser event loop. The manifest's `tty.input` capability enables keyboard routing. There are no `maia.tty` imports or shell DOM controls. `maia.log.write` remains diagnostics, not user-facing shell output.
+The shell reads stdin on handle0 and writes stdout/stderr on1/2. The I/O service
+writes canonical stdin on3 and reads terminal output on4/5. The terminal binds
+stdout/stderr to aliases of the same ordered sink. Partial transfers, bounded
+buffers, WOULD_BLOCK, EOF and peer closure are specified in
+[ABI v0](../../docs/specifications/abi-v0.md). Each guest yields from its step
+function; no browser main-thread blocking or JavaScript terminal is involved.
+Only I/O requests `tty.input`; the host routes keys while the LVGL canvas has
+focus. Prompt, edited input and caret share a single live-line LVGL label.
 
-Reuse the current VFS API for reading existing files. The current ABI does **not** provide directory enumeration, `mkdir`, `unlink`, `chdir`, pipes, process spawn, or terminal descriptors. The MVP command set is `help`, `echo`, shell-local `pwd`, `cat /system/welcome.txt`, `clear`, and `exit`. Add `ls`, writable files, `cd`, redirection, and pipelines only with their required VFS/process contracts and tests. The commands in the future inventory below are not implemented by listing them here.
-
-The current shell uses the app lifecycle (`maia_app_start` plus `maiaos_step`), `apps/shell/manifest.json`, LVGL and event imports, and the MaiaCpp AST-strict -> C89 -> MaiaC -> WASM pipeline. The host smoke and browser test verify the five commands, key editing, LVGL output, VFS access, and exit.
+The command set remains `help`, `echo`, shell-local `pwd`, `cat /system/welcome.txt`,
+`clear`, `exit`. `clear` emits the supported terminal clear/home escape sequence.
+The ABI still lacks directory enumeration, mkdir/unlink/chdir, general spawning
+and descriptor transfer. Future inventories below are not implemented commands.
+The shell retains `maia_app_start`/`maiaos_step`; I/O uses
+`maia_io_start`/`maiaos_step`. Both compile through MaiaCpp AST-strict -> C89 ->
+MaiaC/MaiaWASM; Emscripten builds only the separate platform LVGL module.
 
 ## Status and next steps
 
 | Area | Status |
 |---|---|
 | MaiaCC grammar | Structural subset; generated C++98 lexer/parser embedded in the runtime guest and checked against the JS oracle. |
-| Browser app catalog and LVGL | Implemented; the guest draws its own window, prompt, output, editable line, and caret. |
-| Keyboard event syscalls | Implemented; printable keys, Enter, arrows, Home/End, Backspace, Delete, and one-line Up/Down history are handled by the C guest. |
+| Browser app catalog and LVGL | Implemented; I/O draws its window, output, editable line and caret using shell prompt bytes. |
+| Keyboard event syscalls | Implemented; printable keys, Enter, arrows, Home/End, Backspace, Delete, and one-line Up/Down history are handled by the C++98 I/O guest. |
 | Minimal command executor | Implemented and tested: `help`, `echo`, shell-local `pwd`, `cat /system/welcome.txt`, `clear`, and `exit`. |
 | Browser host smoke | Existing MVP had interactive verification. This integration is tested through Node and the real LVGL-WASM callbacks; browser interaction was not rerun because the integrated browser is unavailable. |
 | Directory and mutable filesystem commands | Not implemented. The VFS needs directory enumeration and working-directory semantics before `ls` or `cd`; writes need their own behavior and tests. |
 | Pipelines, redirection, expansions, jobs, and POSIX conformance | Future work; not required for this MVP. |
 
-The current vertical slice is **kernel + LVGL host callbacks + shell app**. A separate `io.wasm`, HTML terminal panel, Send button, and the Espressif bootloader are not part of this MVP.
+The current reference vertical slice is **kernel + I/O service + shell app + real LVGL callbacks**, with bounded copied-byte streams. Device firmware/MaiaWASMVM integration is still pending.
 
 ## Integrated lexer/parser validation
 
 ```sh
+npm run build:io -- --check-c89
 npm run build:shell
 npm run build:shell -- --check-c89
 npm run test:shell-parser
 npm run test:shell-host
 npm run test:shell-lvgl
+npm run test:io-streams
+npm run test:shell-boot
 npm test
 ```
 
@@ -98,7 +110,8 @@ complete accepted trees. Native C++ receives raw input, not JS-produced tokens.
 It includes Unicode quotes, malformed quotes/escapes and collector exhaustion.
 The previous pre-tokenized parity runner below remains a separate check.
 
-Guest tests deliver keyboard events through `maia.events`, verify exact LVGL
+Guest tests deliver keyboard events to I/O through `maia.events`, transport canonical
+bytes to the actual shell and verify exact LVGL
 output, all six commands, quotes/comments, syntax errors, unsupported compound
 execution and capacity limits. One thousand repeated parses must restore their
 frames and reuse allocations without growing linear memory. `--lvgl` uses the
@@ -109,13 +122,15 @@ Limits remain explicit: 255 editable ASCII bytes, 32 lexer tokens including EOF,
 12 command words, 95 decoded bytes per word, 1024 tree nodes and a 4096-byte
 terminal buffer. These are bounded MVP resources, not a full POSIX shell.
 Errors distinguish malformed syntax, unimplemented execution and capacity.
-The 263-byte input-display buffer includes the six-byte prompt, 255 editable
-bytes, the cursor and terminating NUL. Prompt, input and caret share one LVGL
-label; submitted prompts/commands move into the separate history label.
+The I/O live-line display is bounded at 4095 UTF-8 bytes plus NUL, including
+255 editable ASCII bytes and a caret. Output UTF-8 is decoded incrementally;
+invalid/truncated sequences render U+FFFD. Prompt, input and caret share one LVGL
+label; submitted commands move into the history label. The terminal supports
+clear/home only, and resets history at its fixed 4096-byte budget.
 
 C++ libc/Regex allocations run in the guest. Host `env` bindings implement only
 memory size/grow and forward allocator bridges to guest malloc/free when linked;
-MaiaOS system calls and capability names remain unchanged. The existing LVGL configuration is preserved. The real-LVGL test advances
+The additive stream ABI is documented separately; existing syscall signatures remain unchanged. The existing LVGL configuration is preserved. The real-LVGL test advances
 its timer/render loop after guest events, matching the platform scheduler;
 starving that loop in a synthetic stress test exhausts temporary GUI resources.
 
@@ -191,13 +206,17 @@ The default run reports known POSIX lexical gaps separately. Add `--strict-posix
 
 ## Parsing semantics
 
-The current path is: keyboard -> host event packet -> C++98 line editor -> MaiaCC-generated lexer/parser -> bounded parse-tree validation and word evaluation -> simple-command dispatch -> LVGL/VFS/process imports. The MVP handles command words with basic quotes and escapes. Defer heredocs, POSIX-context-sensitive reserved words, full assignment semantics, expansions, shell functions, `trap`, and job control. `cd`, `export`, `unset`, `set`, `read`, `shift`, and `umask` require persistent shell state and are not part of this command slice.
+The current path is: keyboard -> host event packet -> I/O C++98 line editor -> stdin stream -> shell MaiaCC-generated lexer/parser -> bounded parse-tree validation and word evaluation -> simple-command dispatch -> stdout/stderr streams or VFS -> I/O LVGL rendering. The MVP handles command words with basic quotes and escapes. Defer heredocs, POSIX-context-sensitive reserved words, full assignment semantics, expansions, shell functions, `trap`, and job control. `cd`, `export`, `unset`, `set`, `read`, `shift`, and `umask` require persistent shell state and are not part of this command slice.
 
 ## Terminal and asynchronous stdin roadmap
 
-The browser host translates keydown events into `maia.events` packets only while the LVGL display canvas has focus. The C guest edits and renders the line inside its LVGL window; Enter sends it to the command executor. This avoids DOM terminal controls, asyncify/JSPI, a Worker, and `io.wasm`.
-
-Later, `io.wasm` may own canonical editing, echo, line discipline, and fd 0/1/2. If introduced, it needs an explicit asynchronous ABI and a process/IPC design. **Do not synchronously block the browser main thread.** A coroutine/state-machine API or Worker may be evaluated after the simple host TTY is usable.
+The browser translates keydown events into `maia.events` packets only while the
+LVGL canvas has focus. `io.wasm` now owns canonical editing, echo, history and
+terminal rendering. `shell.wasm` consumes canonical input through the approved
+bounded stream ABI. Both use state machines with bounded work per step and yield
+on WOULD_BLOCK; no synchronous browser wait, Worker, asyncify or JSPI is required.
+Future pipelines must preserve backpressure using this stream contract and need
+separate process-spawn/descriptor-binding approval and tests.
 
 ## Long-term host ABI proposal
 
