@@ -27,6 +27,7 @@ const shellManifest = JSON.parse(await readFile(new URL("../apps/shell/manifest.
 const ioBytes = await readFile(new URL("../apps/io/io.wasm", import.meta.url));
 const shellBytes = await readFile(new URL("../apps/shell/shell.wasm", import.meta.url));
 let failIo = false;
+const adapters = [];
 const context = vm.createContext({
   WebAssembly, URL, Uint8Array, Number, TypeError, RangeError, Error, console,
   nextProcessId: 1, runningProcesses, buttonOwners: new Map(), streamBroker: broker,
@@ -34,7 +35,11 @@ const context = vm.createContext({
   BROWSER_HOST_GRANTS: [...new Set([...ioManifest.capabilities, ...shellManifest.capabilities])],
   window: {location: {href: "http://localhost:8080/"}},
   document: {getElementById: () => ({textContent: ""})},
-  createAppVfs: async appId => new MemoryVfsAdapter({appId}),
+  // Storage callback fixture: actual boot code applies limits and owns lifecycle.
+  IndexedDbVfsAdapter: {create: async options => {
+    const adapter = new MemoryVfsAdapter(options); adapters.push(adapter); return adapter;
+  }},
+  MemoryVfsAdapter, status: {textContent: ""},
   fetch: async url => ({ok: true,
     json: async () => failIo ? {...ioManifest, entryExport: "missing_entry"} : ioManifest,
     arrayBuffer: async () => ioBytes,
@@ -43,11 +48,12 @@ const context = vm.createContext({
 const extract = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 vm.runInContext(extract("function processGraphics(", "function routeLvglEvent(")
   + extract("function stopProcess(", "async function createAppVfs(")
-  + extract("async function startProcess(", "async function launchSelectedApp("), context);
+  + extract("async function createAppVfs(", "async function launchSelectedApp("), context);
 const options = {manifest: shellManifest, bytes: shellBytes,
   entryName: shellManifest.entryExport, stepName: shellManifest.stepExport};
 const empty = () => {assert.equal(runningProcesses.size, 0); assert.equal(liveWindows.size, 0);
-  assert.equal(broker.stats.pipes, 0); assert.equal(broker.stats.endpoints, 0);};
+  assert.equal(broker.stats.pipes, 0); assert.equal(broker.stats.endpoints, 0);
+  assert.ok(adapters.every(adapter => adapter.openHandleCount === 0));};
 await assert.rejects(context.startApplication({...options, bytes: new Uint8Array([0])}), /WebAssembly/); empty();
 await assert.rejects(context.startApplication({...options, entryName: "missing_shell_entry"}), /missing_shell_entry/); empty();
 failIo = true;
@@ -56,6 +62,7 @@ for (let session = 0; session < 25; ++session) {
   const shell = await context.startApplication(options);
   const io = [...runningProcesses].find(process => process.role === "service");
   assert.ok(io.acceptsKeyboardInput); assert.equal(shell.acceptsKeyboardInput, false);
+  assert.equal(io.vfs.maxOpenFiles, 0); assert.equal(shell.vfs.maxOpenFiles, 4);
   assert.equal(runningProcesses.size, 2); assert.equal(liveWindows.size, 1);
   for (const character of "exit") io.host.enqueueEvent({type: MAIA_EVENT_KEY, objectHandle: 0, data0: character.charCodeAt(0), data1: MAIA_KEY_TEXT});
   io.host.enqueueEvent({type: MAIA_EVENT_KEY, objectHandle: 0, data1: MAIA_KEY_ENTER});
@@ -65,5 +72,25 @@ for (let session = 0; session < 25; ++session) {
   }
   empty();
 }
+// A real guest import trap while ls owns a directory must release that handle.
+{
+  const process = await context.startApplication(options);
+  const io = [...runningProcesses].find(item => item.role === "service");
+  process.vfs.readdir = () => { throw new Error("Injected directory transport trap"); };
+  broker.write(io.pid, 3, new TextEncoder().encode("ls /system\n"));
+  assert.throws(() => process.runtime.exports.maiaos_step(), /directory transport trap/);
+  assert.equal(process.vfs.openHandleCount, 1);
+  context.stopProcess(process, 1);
+  assert.equal(process.vfs.openHandleCount, 0);
+  for (let tick = 0; tick < 12; ++tick) {
+    lvgl._maiaos_lvgl_tick();
+    for (const item of [...runningProcesses]) item.runtime.exports[item.stepExport]();
+  }
+  empty();
+}
+assert.equal((await context.createAppVfs("limit.test", 100)).maxOpenFiles, 16);
+await assert.rejects(context.createAppVfs("limit.test", -1), /Invalid open-file limit/);
+await assert.rejects(context.createAppVfs("limit.test", 1.5), /Invalid open-file limit/);
+assert.equal(context.window.location.href, "http://localhost:8080/");
 assert.ok(flushes > 0);
-console.log(`Actual boot functions passed: failed I/O/shell startup cleanup, keyboard ownership, 25 real LVGL session launches/exits, zero surviving windows/endpoints (${flushes} flushes).`);
+console.log(`Actual boot functions passed: failed I/O/shell startup cleanup, keyboard ownership, 25 real LVGL session launches/exits, directory-trap cleanup, manifest quotas, unchanged URL, zero surviving windows/endpoints (${flushes} flushes).`);

@@ -28,3 +28,9 @@ The current kernel manifest selects `maiaos_start` as its entry export and `maia
 The manifest is a **request**, not an authorization. Each host maps imported WASM names to capability names, requires every import to be requested here, then applies its independent policy grants. Unknown imports and imports denied by policy must be rejected before guest execution. Installation must verify path confinement and package size; optional package signatures are a future deployment requirement. `limits` cannot raise host policy maxima.
 
 The browser reference host supports `entryExport` plus an optional `stepExport`. It creates one host-import table, guest memory, event queue and VFS adapter per running app. LVGL is shared; button handles are routed to the owning process. `maia.process.exit(i32)` ends that app instance and destroys its root window without stopping the kernel or other apps. App scheduling runs on the browser animation frame and does not claim VM fuel or preemption. Launching the shell also starts its I/O service with independent memory and stream capabilities. Only I/O requests `tty.input`; the boot host supplies stdin/stdout/stderr bindings described in [ABI v0](abi-v0.md). Manifest memory limits are checked at startup; runtime memory/fuel enforcement remains pending.
+
+The directory extension maps `maia.vfs.opendir/readdir` to requested capabilities
+`vfs.opendir/readdir`; both remain subject to host policy. File and directory
+handles share `limits.openFiles`, passed to the adapter and capped at 16 in the
+reference host. A zero limit (I/O guest) forbids VFS handle allocation. All VFS
+handles are released at exit/trap/failed startup.

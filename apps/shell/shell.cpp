@@ -9,6 +9,8 @@ MAIA_IMPORT("maia.stream", "write") int32_t maia_stream_write(int32_t handle, in
 MAIA_IMPORT("maia.stream", "close") int32_t maia_stream_close(int32_t handle);
 MAIA_IMPORT("maia.vfs", "open") int32_t maia_vfs_open(int32_t pointer, int32_t length, int32_t flags);
 MAIA_IMPORT("maia.vfs", "read") int32_t maia_vfs_read(int32_t handle, int32_t pointer, int32_t count);
+MAIA_IMPORT("maia.vfs", "opendir") int32_t maia_vfs_opendir(int32_t pointer, int32_t length);
+MAIA_IMPORT("maia.vfs", "readdir") int32_t maia_vfs_readdir(int32_t handle, int32_t pointer, int32_t capacity);
 MAIA_IMPORT("maia.vfs", "close") int32_t maia_vfs_close(int32_t handle);
 MAIA_IMPORT("maia.process", "exit") void maia_process_exit(int32_t status);
 }
@@ -33,6 +35,12 @@ static unsigned int gTokenCount = 0;
 static int gInputOverflow = 0;
 static int gInputEOF = 0;
 static int gCatHandle = -1;
+static int gDirectoryHandle = -1;
+static char gCwd[1024] = "/";
+// Scratch also holds a maximal cwd plus one bounded operand before normalization.
+static char gResolvedPath[1152];
+static uint8_t gDirectoryPacket[271];
+static char gDirectoryOutput[1024];
 static int gExitRequested = 0;
 static int gExited = 0;
 static int gFatal = 0;
@@ -111,6 +119,101 @@ static void resumeCat(void)
     maia_vfs_close(gCatHandle); gCatHandle = -1;
     if (count < 0) writeText(2, "cat: read failed\n");
     if (!gInputEOF) writeText(1, kPromptText);
+}
+static int resolvePath(const char* path)
+{
+    if (!path || !path[0]) return 0;
+    unsigned int length = 1;
+    gResolvedPath[0] = '/';
+    if (path[0] != '/') {
+        length = textLength(gCwd);
+        for (unsigned int i = 0; i < length; ++i) gResolvedPath[i] = gCwd[i];
+    }
+    unsigned int offset = 0;
+    while (path[offset]) {
+        while (path[offset] == '/') ++offset;
+        const unsigned int start = offset;
+        while (path[offset] && path[offset] != '/') ++offset;
+        const unsigned int count = offset - start;
+        if (count == 0 || (count == 1 && path[start] == '.')) continue;
+        if (count == 2 && path[start] == '.' && path[start + 1] == '.') {
+            while (length > 1 && gResolvedPath[length - 1] != '/') --length;
+            if (length > 1) --length;
+            continue;
+        }
+        const unsigned int separator = length > 1 ? 1 : 0;
+        if (length + separator + count >= 1152) return 0;
+        if (separator) gResolvedPath[length++] = '/';
+        for (unsigned int i = 0; i < count; ++i) gResolvedPath[length++] = path[start + i];
+    }
+    if (length >= 1024) return 0;
+    gResolvedPath[length] = 0;
+    return 1;
+}
+static void directoryError(const char* command, int status)
+{
+    writeText(2, command); writeText(2, ": ");
+    if (status == -1) writeText(2, "invalid path or directory entry\n");
+    else if (status == -2) writeText(2, "no such directory\n");
+    else if (status == -3) writeText(2, "permission denied\n");
+    else if (status == -4) writeText(2, "directory limit exceeded\n");
+    else if (status == -9) writeText(2, "not a directory\n");
+    else writeText(2, "directory operation failed\n");
+}
+static void runDirectoryCommand(const char* command, unsigned int wordCount)
+{
+    const int change = textEquals(command, "cd");
+    const char* path = wordCount == 1 ? (change ? "/home/org.maiaplatform.shell" : gCwd) : gCommandWords + kMaxWordBytes;
+    if (wordCount > 2 || path[0] == '-') {
+        writeText(2, change ? "usage: cd [path]\n" : "usage: ls [path]\n"); return;
+    }
+    if (!resolvePath(path)) { directoryError(command, -1); return; }
+    const int32_t handle = maia_vfs_opendir(static_cast<int32_t>(reinterpret_cast<uintptr_t>(gResolvedPath)),
+        static_cast<int32_t>(textLength(gResolvedPath)));
+    if (handle < 0) { directoryError(command, handle); return; }
+    if (change) {
+        const int32_t status = maia_vfs_close(handle);
+        if (status < 0) { directoryError(command, status); return; }
+        const unsigned int length = textLength(gResolvedPath);
+        for (unsigned int i = 0; i <= length; ++i) gCwd[i] = gResolvedPath[i];
+    } else gDirectoryHandle = handle;
+}
+static uint32_t directoryUint32(const uint8_t* bytes)
+{
+    return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8)
+        | (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
+}
+static void endListing(int status)
+{
+    maia_vfs_close(gDirectoryHandle); gDirectoryHandle = -1;
+    if (status < 0) directoryError("ls", status);
+    if (!gInputEOF) writeText(1, kPromptText);
+}
+static void resumeListing(void)
+{
+    const int32_t count = maia_vfs_readdir(gDirectoryHandle,
+        static_cast<int32_t>(reinterpret_cast<uintptr_t>(gDirectoryPacket)), 271);
+    if (count <= 0) { endListing(count); return; }
+    if (count < 17 || count > 271 || directoryUint32(gDirectoryPacket) != 1
+        || directoryUint32(gDirectoryPacket + 12) != 0) { endListing(-1); return; }
+    const unsigned int type = directoryUint32(gDirectoryPacket + 4);
+    const unsigned int length = directoryUint32(gDirectoryPacket + 8);
+    if ((type != 1 && type != 2) || length == 0 || length > 255
+        || length + 16 != static_cast<unsigned int>(count)) { endListing(-1); return; }
+    unsigned int output = 0;
+    const char* digits = "0123456789ABCDEF";
+    for (unsigned int i = 0; i < length; ++i) {
+        const unsigned int value = gDirectoryPacket[16 + i];
+        if (value == 0 || value == '/') { endListing(-1); return; }
+        if (value == 92) { gDirectoryOutput[output++] = 92; gDirectoryOutput[output++] = 92; }
+        else if (value < 32 || value == 127) {
+            gDirectoryOutput[output++] = 92; gDirectoryOutput[output++] = 'x';
+            gDirectoryOutput[output++] = digits[value >> 4]; gDirectoryOutput[output++] = digits[value & 15];
+        } else gDirectoryOutput[output++] = static_cast<char>(value);
+    }
+    if (type == 2) gDirectoryOutput[output++] = '/';
+    gDirectoryOutput[output++] = '\n';
+    writeBytes(1, gDirectoryOutput, output);
 }
 static int tokenizeLine(void)
 {
@@ -196,7 +299,7 @@ static int parseSimpleCommand(unsigned int* wordCount)
 
 static void printHelp(void)
 {
-    writeText(1, "Commands: help, echo, pwd, cat /system/welcome.txt, clear, exit\n");
+    writeText(1, "Commands: help, echo, pwd, ls [path], cd [path], cat /system/welcome.txt, clear, exit\n");
 }
 
 static void executeCommand(unsigned int wordCount)
@@ -212,7 +315,9 @@ static void executeCommand(unsigned int wordCount)
         }
         writeText(1, "\n");
     } else if (textEquals(command, "pwd") && wordCount == 1) {
-        writeText(1, "/\n");
+        writeText(1, gCwd); writeText(1, "\n");
+    } else if (textEquals(command, "ls") || textEquals(command, "cd")) {
+        runDirectoryCommand(command, wordCount);
     } else if (textEquals(command, "cat") && wordCount == 2
         && textEquals(gCommandWords + kMaxWordBytes, "/system/welcome.txt")) {
         runCat(gCommandWords + kMaxWordBytes);
@@ -253,13 +358,14 @@ static void processLine(void)
         return;
     }
     if (wordCount > 0) executeCommand(wordCount);
-    if (!gExitRequested && !gInputEOF && gCatHandle < 0) writeText(1, kPromptText);
+    if (!gExitRequested && !gInputEOF && gCatHandle < 0 && gDirectoryHandle < 0) writeText(1, kPromptText);
 }
 
 
 static void finish(void)
 {
     if (gCatHandle >= 0) { maia_vfs_close(gCatHandle); gCatHandle = -1; }
+    if (gDirectoryHandle >= 0) { maia_vfs_close(gDirectoryHandle); gDirectoryHandle = -1; }
     for (int32_t handle = 0; handle < 3; ++handle) maia_stream_close(handle);
     gExited = 1; maia_process_exit(gFatal ? 1 : 0);
 }
@@ -286,6 +392,7 @@ extern "C" __attribute__((visibility("default"))) void maiaos_step(void)
         if (gPendingLength) return;
         if (gExitRequested) { finish(); return; }
         if (gCatHandle >= 0) { resumeCat(); continue; }
+        if (gDirectoryHandle >= 0) { resumeListing(); continue; }
         if (gInputEOF) { gExitRequested = 1; continue; }
         if (gInputOffset == gInputCount) {
             const int32_t count = maia_stream_read(0,

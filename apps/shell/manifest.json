@@ -17,7 +17,9 @@
     "process.exit",
     "stream.read",
     "stream.write",
-    "stream.close"
+    "stream.close",
+    "vfs.opendir",
+    "vfs.readdir"
   ],
   "limits": {
     "memoryPages": 32,

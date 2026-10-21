@@ -8,6 +8,7 @@ const STATUS = Object.freeze({
   WOULD_BLOCK: -6,
   INVALID_HANDLE: -7,
   CLOSED: -8,
+  NOT_DIRECTORY: -9,
 });
 const EVENT_PACKET_VERSION = 1;
 const EVENT_PACKET_BYTES = 24;
@@ -226,6 +227,7 @@ export function createMaiaHostImports({
     "maia.process": {
       exit: (exitCode) => {
         if (streams) streams.closeProcess(processId);
+        if (typeof vfs.closeAll === "function") vfs.closeAll();
         onProcessExit(exitCode);
       },
     },
@@ -233,6 +235,27 @@ export function createMaiaHostImports({
       monotonic_ms: () => BigInt(Math.max(0, Math.trunc(monotonicMs()))),
     },
   };
+
+  if (typeof vfs.opendir === "function" && typeof vfs.readdir === "function") {
+    imports["maia.vfs"].opendir = (pointer, length) => {
+      if (!Number.isInteger(length) || length < 1 || length > 1023) return STATUS.INVALID_ARGUMENT;
+      try {
+        validateGuestRange(guestMemory, pointer, length);
+        const path = new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(new Uint8Array(guestMemory.buffer, pointer, length));
+        return vfs.opendir(path);
+      }
+      catch { return STATUS.INVALID_ARGUMENT; }
+    };
+    imports["maia.vfs"].readdir = (handle, pointer, capacity) => {
+      if (!Number.isInteger(capacity) || capacity < 16 || capacity > 4096) return STATUS.INVALID_ARGUMENT;
+      try { validateGuestRange(guestMemory, pointer, capacity); }
+      catch { return STATUS.INVALID_ARGUMENT; }
+      const result = vfs.readdir(handle, capacity);
+      if (typeof result === "number") return result;
+      new Uint8Array(guestMemory.buffer, pointer, result.length).set(result);
+      return result.length;
+    };
+  }
 
   if (streams) {
     imports["maia.stream"] = {
@@ -331,6 +354,9 @@ export function createMaiaHostImports({
     },
     get queuedEventCount() {
       return eventQueue.length;
+    },
+    closeFiles() {
+      if (typeof vfs.closeAll === "function") vfs.closeAll();
     },
     closeStreams() {
       if (streams) streams.closeProcess(processId);

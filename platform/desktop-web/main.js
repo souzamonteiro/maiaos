@@ -40,6 +40,8 @@ const BROWSER_HOST_GRANTS = [
   "vfs.read",
   "vfs.write",
   "vfs.close",
+  "vfs.opendir",
+  "vfs.readdir",
   "tty.input",
   "process.exit",
   "time.monotonic",
@@ -180,6 +182,7 @@ function stopProcess(process, exitCode) {
   process.running = false;
   runningProcesses.delete(process);
   process.host?.closeStreams();
+  process.host?.closeFiles();
   for (const [handle, owner] of buttonOwners) {
     if (owner === process) buttonOwners.delete(handle);
   }
@@ -202,10 +205,13 @@ function stopProcess(process, exitCode) {
   }
 }
 
-async function createAppVfs(appId) {
+async function createAppVfs(appId, requestedLimit = 16) {
+  if (!Number.isInteger(requestedLimit) || requestedLimit < 0) throw new TypeError("Invalid open-file limit");
+  const maxOpenFiles = Math.min(requestedLimit, 16);
   try {
     return await IndexedDbVfsAdapter.create({
       appId,
+      maxOpenFiles,
       onPersistenceError: (error) => {
         status.textContent = `VFS persistence failed: ${error.message}`;
         console.error("[maia vfs] persistence failed", error);
@@ -214,7 +220,7 @@ async function createAppVfs(appId) {
   } catch (error) {
     status.textContent = "Persistent storage unavailable; using temporary VFS.";
     console.error("[maia vfs] using temporary storage", error);
-    return new MemoryVfsAdapter({ appId });
+    return new MemoryVfsAdapter({ appId, maxOpenFiles });
   }
 }
 
@@ -233,7 +239,7 @@ async function startProcess({ manifest, bytes, role, entryName, stepName, pid = 
     windowHandle: -1,
     runtime: null,
     host: null,
-    vfs: await createAppVfs(manifest.id),
+    vfs: await createAppVfs(manifest.id, manifest.limits?.openFiles),
     stepExport: stepName || null,
   };
   process.host = createMaiaHostImports({

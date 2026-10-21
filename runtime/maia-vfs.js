@@ -14,6 +14,7 @@ const STATUS = Object.freeze({
   OUT_OF_MEMORY: -4,
   UNSUPPORTED: -5,
   INVALID_HANDLE: -7,
+  NOT_DIRECTORY: -9,
 });
 
 const VALID_MOUNTS = new Set(["system", "apps", "home", "tmp", "shared"]);
@@ -55,6 +56,7 @@ export class MemoryVfsAdapter {
     if (typeof appId !== "string" || !APP_ID_PATTERN.test(appId)) {
       throw new TypeError("Invalid VFS appId");
     }
+    if (!Number.isInteger(maxOpenFiles) || maxOpenFiles < 0 || maxOpenFiles > 16) throw new TypeError("Invalid open-file limit");
     this.files = new Map(
       Object.entries({
         "/system/welcome.txt": "C++ kernel read this text through maia.vfs.\n",
@@ -109,6 +111,7 @@ export class MemoryVfsAdapter {
     const handle = this.nextHandle++;
     this.files.set(path, bytes);
     this.handles.set(handle, {
+      kind: "file",
       path,
       flags,
       position: 0,
@@ -119,6 +122,7 @@ export class MemoryVfsAdapter {
   read(handle, count) {
     const file = this.handles.get(handle);
     if (!file) return STATUS.INVALID_HANDLE;
+    if (file.kind === "directory") return STATUS.INVALID_ARGUMENT;
     if ((file.flags & VFS_FLAGS.READ) === 0) return STATUS.PERMISSION_DENIED;
     if (!Number.isInteger(count) || count < 0) return STATUS.INVALID_ARGUMENT;
 
@@ -132,6 +136,7 @@ export class MemoryVfsAdapter {
   write(handle, input) {
     const file = this.handles.get(handle);
     if (!file) return STATUS.INVALID_HANDLE;
+    if (file.kind === "directory") return STATUS.INVALID_ARGUMENT;
     if ((file.flags & VFS_FLAGS.WRITE) === 0) return STATUS.PERMISSION_DENIED;
     if (!(input instanceof Uint8Array)) return STATUS.INVALID_ARGUMENT;
 
@@ -143,6 +148,87 @@ export class MemoryVfsAdapter {
     this.files.set(file.path, updated);
     file.position = end;
     return input.byteLength;
+  }
+
+  // Read-only directory snapshots derived from the caller's visible namespace.
+  opendir(rawPath) {
+    let path;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+    if (typeof rawPath !== "string" || rawPath.length === 0) return STATUS.INVALID_ARGUMENT;
+    const rawBytes = encoder.encode(rawPath);
+    if (rawBytes.length > 1023 || decoder.decode(rawBytes) !== rawPath) return STATUS.INVALID_ARGUMENT;
+    try { path = normalizeGuestPath(rawPath); } catch { return STATUS.INVALID_ARGUMENT; }
+    if (path !== "/" && !mountFor(path)) return STATUS.NOT_FOUND;
+    if (mountFor(path) === "home" && path !== "/home"
+        && path !== this.homeRoot && !path.startsWith(`${this.homeRoot}/`)) return STATUS.PERMISSION_DENIED;
+    const virtual = ["/", ...[...VALID_MOUNTS].map(mount => `/${mount}`), this.homeRoot];
+    const visible = file => !!mountFor(file) && (mountFor(file) !== "home" || file === this.homeRoot || file.startsWith(`${this.homeRoot}/`));
+    let prefix = "";
+    for (const part of path.split("/").filter(Boolean)) {
+      prefix += "/" + part;
+      if (this.files.has(prefix)) return STATUS.NOT_DIRECTORY;
+    }
+    const directoryPrefix = path === "/" ? "/" : path + "/";
+    const children = new Map();
+    let exists = virtual.includes(path);
+    let snapshotBytes = 0;
+    const add = (fullPath, directory) => {
+      if (!fullPath.startsWith(directoryPrefix) || fullPath === path) return 0;
+      const suffix = fullPath.slice(directoryPrefix.length);
+      if (!suffix) return 0;
+      exists = true;
+      const slash = suffix.indexOf("/");
+      const name = slash < 0 ? suffix : suffix.slice(0, slash);
+      const type = directory || slash >= 0 ? 2 : 1;
+      const prior = children.get(name);
+      if (prior) return prior.type === type ? 0 : STATUS.NOT_DIRECTORY;
+      const bytes = encoder.encode(name);
+      if (!name || name.includes("\0") || decoder.decode(bytes) !== name) return STATUS.INVALID_ARGUMENT;
+      if (bytes.length > 255) return STATUS.OUT_OF_MEMORY;
+      snapshotBytes += 16 + bytes.length;
+      if (children.size >= 1024 || snapshotBytes > 65536) return STATUS.OUT_OF_MEMORY;
+      children.set(name, { type, bytes });
+      return 0;
+    };
+    for (const dir of virtual) { const status = add(dir, true); if (status < 0) return status; }
+    for (const file of this.files.keys()) {
+      if (!visible(file)) continue;
+      const status = add(file, false); if (status < 0) return status;
+    }
+    if (!exists) return STATUS.NOT_FOUND;
+    if (this.handles.size >= this.maxOpenFiles) return STATUS.OUT_OF_MEMORY;
+    const entries = [...children.values()].sort((a, b) => {
+      for (let i = 0; i < Math.min(a.bytes.length, b.bytes.length); ++i) {
+        if (a.bytes[i] !== b.bytes[i]) return a.bytes[i] - b.bytes[i];
+      }
+      return a.bytes.length - b.bytes.length;
+    }).map(({type, bytes}) => {
+      const packet = new Uint8Array(16 + bytes.length);
+      const header = new DataView(packet.buffer);
+      header.setUint32(0, 1, true); header.setUint32(4, type, true);
+      header.setUint32(8, bytes.length, true); header.setUint32(12, 0, true);
+      packet.set(bytes, 16); return packet;
+    });
+    const handle = this.nextHandle++;
+    this.handles.set(handle, { kind: "directory", entries, position: 0 });
+    return handle;
+  }
+
+  readdir(handle, capacity) {
+    const directory = this.handles.get(handle);
+    if (!directory) return STATUS.INVALID_HANDLE;
+    if (directory.kind !== "directory") return STATUS.INVALID_ARGUMENT;
+    if (!Number.isInteger(capacity) || capacity < 16 || capacity > 4096) return STATUS.INVALID_ARGUMENT;
+    if (directory.position === directory.entries.length) return new Uint8Array(0);
+    const packet = directory.entries[directory.position];
+    if (packet.length > capacity) return STATUS.OUT_OF_MEMORY;
+    ++directory.position;
+    return packet.slice();
+  }
+
+  closeAll() {
+    this.handles.clear();
   }
 
   close(handle) {
@@ -160,16 +246,17 @@ export class IndexedDbVfsAdapter extends MemoryVfsAdapter {
     indexedDB = globalThis.indexedDB,
     onPersistenceError = () => {},
     appId = "default",
+    maxOpenFiles = 16,
   } = {}) {
     if (!indexedDB) throw new Error("IndexedDB is unavailable");
     const database = await openVfsDatabase(indexedDB, databaseName);
-    const adapter = new IndexedDbVfsAdapter(database, onPersistenceError, appId);
+    const adapter = new IndexedDbVfsAdapter(database, onPersistenceError, appId, maxOpenFiles);
     await adapter.hydrate();
     return adapter;
   }
 
-  constructor(database, onPersistenceError, appId) {
-    super({ appId });
+  constructor(database, onPersistenceError, appId, maxOpenFiles = 16) {
+    super({ appId, maxOpenFiles });
     this.database = database;
     this.onPersistenceError = onPersistenceError;
     this.pendingPersistence = Promise.resolve();

@@ -13,6 +13,8 @@ const IMPORT_CAPABILITIES = Object.freeze({
   "maia.vfs.read": "vfs.read",
   "maia.vfs.write": "vfs.write",
   "maia.vfs.close": "vfs.close",
+  "maia.vfs.opendir": "vfs.opendir",
+  "maia.vfs.readdir": "vfs.readdir",
   "maia.stream.read": "stream.read",
   "maia.stream.write": "stream.write",
   "maia.stream.close": "stream.close",

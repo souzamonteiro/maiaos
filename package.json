@@ -20,6 +20,7 @@
     "demo": "node platform/desktop-web/server.js",
     "build:io": "node scripts/build-io-wasm.mjs",
     "test:io-streams": "node scripts/test-io-streams.mjs",
-    "test:shell-boot": "node scripts/test-shell-boot.mjs"
+    "test:shell-boot": "node scripts/test-shell-boot.mjs",
+    "test:shell-directories": "node scripts/test-shell-directories.mjs"
   }
 }

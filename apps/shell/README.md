@@ -50,7 +50,7 @@ C++98 lexer/parser and executes commands/VFS operations.
 | Guest | Imports / responsibility |
 |---|---|
 | I/O | `maia.gfx.window_create/label_create/label_set_text`, `maia.events.poll`, `maia.stream.read/write/close`, `maia.process.exit` |
-| Shell | `maia.stream.read/write/close`, `maia.vfs.open/read/close`, `maia.process.exit`, toolchain memory/allocator support |
+| Shell | `maia.stream.read/write/close`, `maia.vfs.open/read/close/opendir/readdir`, `maia.process.exit`, toolchain memory/allocator support |
 
 The shell reads stdin on handle0 and writes stdout/stderr on1/2. The I/O service
 writes canonical stdin on3 and reads terminal output on4/5. The terminal binds
@@ -61,10 +61,11 @@ function; no browser main-thread blocking or JavaScript terminal is involved.
 Only I/O requests `tty.input`; the host routes keys while the LVGL canvas has
 focus. Prompt, edited input and caret share a single live-line LVGL label.
 
-The command set remains `help`, `echo`, shell-local `pwd`, `cat /system/welcome.txt`,
-`clear`, `exit`. `clear` emits the supported terminal clear/home escape sequence.
-The ABI still lacks directory enumeration, mkdir/unlink/chdir, general spawning
-and descriptor transfer. Future inventories below are not implemented commands.
+The command set is `help`, `echo`, `pwd`, `ls [path]`, `cd [path]`,
+`cat /system/welcome.txt`, `clear`, `exit`. `clear` emits the supported terminal clear/home escape sequence.
+The additive `maia.vfs.opendir/readdir` imports supply bounded directory snapshots.
+The shell owns its cwd; no host-global chdir is performed. Mutable directory
+operations, general spawning and descriptor transfer remain future work.
 The shell retains `maia_app_start`/`maiaos_step`; I/O uses
 `maia_io_start`/`maiaos_step`. Both compile through MaiaCpp AST-strict -> C89 ->
 MaiaC/MaiaWASM; Emscripten builds only the separate platform LVGL module.
@@ -76,9 +77,10 @@ MaiaC/MaiaWASM; Emscripten builds only the separate platform LVGL module.
 | MaiaCC grammar | Structural subset; generated C++98 lexer/parser embedded in the runtime guest and checked against the JS oracle. |
 | Browser app catalog and LVGL | Implemented; I/O draws its window, output, editable line and caret using shell prompt bytes. |
 | Keyboard event syscalls | Implemented; printable keys, Enter, arrows, Home/End, Backspace, Delete, and one-line Up/Down history are handled by the C++98 I/O guest. |
-| Minimal command executor | Implemented and tested: `help`, `echo`, shell-local `pwd`, `cat /system/welcome.txt`, `clear`, and `exit`. |
+| Minimal command executor | Implemented and tested: `help`, `echo`, `pwd`, `ls`, `cd`, `cat /system/welcome.txt`, `clear`, `exit`. |
 | Browser host smoke | Existing MVP had interactive verification. This integration is tested through Node and the real LVGL-WASM callbacks; browser interaction was not rerun because the integrated browser is unavailable. |
-| Directory and mutable filesystem commands | Not implemented. The VFS needs directory enumeration and working-directory semantics before `ls` or `cd`; writes need their own behavior and tests. |
+| Directory navigation | Implemented: bounded `ls [path]`, `cd [path]`, real per-instance `pwd`; own-home isolation and escaped control bytes. |
+| Mutable filesystem commands | Not implemented; mkdir/unlink and write/redirection semantics need their own contracts/tests. |
 | Pipelines, redirection, expansions, jobs, and POSIX conformance | Future work; not required for this MVP. |
 
 The current reference vertical slice is **kernel + I/O service + shell app + real LVGL callbacks**, with bounded copied-byte streams. Device firmware/MaiaWASMVM integration is still pending.
@@ -94,6 +96,7 @@ npm run test:shell-host
 npm run test:shell-lvgl
 npm run test:io-streams
 npm run test:shell-boot
+npm run test:shell-directories
 npm test
 ```
 
@@ -112,7 +115,7 @@ The previous pre-tokenized parity runner below remains a separate check.
 
 Guest tests deliver keyboard events to I/O through `maia.events`, transport canonical
 bytes to the actual shell and verify exact LVGL
-output, all six commands, quotes/comments, syntax errors, unsupported compound
+output, all eight commands, quotes/comments, syntax errors, unsupported compound
 execution and capacity limits. One thousand repeated parses must restore their
 frames and reuse allocations without growing linear memory. `--lvgl` uses the
 actual platform LVGL module and requires valid RGB565 flushes; callback-only
@@ -206,7 +209,7 @@ The default run reports known POSIX lexical gaps separately. Add `--strict-posix
 
 ## Parsing semantics
 
-The current path is: keyboard -> host event packet -> I/O C++98 line editor -> stdin stream -> shell MaiaCC-generated lexer/parser -> bounded parse-tree validation and word evaluation -> simple-command dispatch -> stdout/stderr streams or VFS -> I/O LVGL rendering. The MVP handles command words with basic quotes and escapes. Defer heredocs, POSIX-context-sensitive reserved words, full assignment semantics, expansions, shell functions, `trap`, and job control. `cd`, `export`, `unset`, `set`, `read`, `shift`, and `umask` require persistent shell state and are not part of this command slice.
+The current path is: keyboard -> host event packet -> I/O C++98 line editor -> stdin stream -> shell MaiaCC-generated lexer/parser -> bounded parse-tree validation and word evaluation -> simple-command dispatch -> stdout/stderr streams or VFS -> I/O LVGL rendering. The MVP handles command words with basic quotes and escapes. Defer heredocs, POSIX-context-sensitive reserved words, full assignment semantics, expansions, shell functions, `trap`, and job control. `cd` keeps cwd in its own guest memory. `export`, `unset`, `set`, `read`, `shift`, and `umask` require additional shell state and are not part of this command slice.
 
 ## Terminal and asynchronous stdin roadmap
 
@@ -226,15 +229,33 @@ This broad POSIX-like proposal is **not** the ABI to implement for the MVP. It o
 
 ## Virtual filesystem limits
 
-The shell currently reads the seeded `/system/welcome.txt` through the existing VFS API. The ABI does not expose directory enumeration, `mkdir`, `unlink`, or `chdir`, so `ls`, `cd`, and mutable filesystem workflows are outside the MVP. Browser storage is not a host POSIX filesystem; future `cwd` must remain per-process and must not change the browser URL.
+The shell reads `/system/welcome.txt` through existing file imports. Directory
+imports now support `ls [path]` and `cd [path]` using the same private VFS view.
+Cwd starts at `/`; `cd` without an operand selects the shell's own home. Relative
+paths, repeated slashes, `.` and `..` are normalized lexically; above-root `..`
+stays at root. Failed cd leaves cwd unchanged. Paths are bounded at 1023 normalized
+UTF-8 bytes, while existing input/word limits still apply. No flags, `cd -`,
+HOME/OLDPWD expansion, symlinks or host/browser directory changes are supported.
+
+Listings contain immediate children, including dot-prefixed names, sorted by
+UTF-8 bytes. Directory names end in `/`; backslash and ASCII control bytes are
+escaped. Each snapshot is bounded at 1024 entries / 64KiB; entry names at 255 UTF-8
+bytes. The shell yields/resumes under output backpressure, preserving all entries,
+and closes the directory on EOF/error/exit. Missing, denied and non-directory
+paths have distinct errors. Arbitrary empty directories/mkdir/unlink, file
+mutation, broader cat and redirection are not implemented. See the
+[approved contract](../../docs/planning/SHELL_VFS_DIRECTORIES.md) for packet/limits
+and snapshot semantics. `npm run test:shell-directories` checks actual WASM,
+1024-entry output through a 31-byte ring, independent cwd instances, repeated
+navigation, exact path bounds, capability denial and malformed-packet cleanup.
 
 ## Future command inventory
 
 The grammar test validates parsing only. The implemented MVP commands are listed above; the utilities and builtins below are targets, not implemented features.
 
-**Future shell builtins:** `:`, `.`, `alias`, `bg`, `break`, `cd`, `command`, `continue`, `eval`, `exec`, `export`, `false`, `fg`, `getopts`, `hash`, `jobs`, `kill`, `read`, `readonly`, `return`, `set`, `shift`, `test`, `[`, `times`, `trap`, `true`, `type`, `ulimit`, `umask`, `unalias`, `unset`, `wait`.
+**Future shell builtins:** `:`, `.`, `alias`, `bg`, `break`, `command`, `continue`, `eval`, `exec`, `export`, `false`, `fg`, `getopts`, `hash`, `jobs`, `kill`, `read`, `readonly`, `return`, `set`, `shift`, `test`, `[`, `times`, `trap`, `true`, `type`, `ulimit`, `umask`, `unalias`, `unset`, `wait`.
 
-**Core utilities, phase 1:** `basename`, `clear`, `cmp`, `cp`, `cut`, `date`, `dirname`, `env`, `expr`, `find`, `grep`, `head`, `id`, `ln`, `ls`, `mkdir`, `mktemp`, `mv`, `printf`, `rm`, `rmdir`, `sed`, `seq`, `sleep`, `sort`, `stat`, `tail`, `tee`, `touch`, `tr`, `uname`, `uniq`, `wc`, `which`, `xargs`, `yes`.
+**Core utilities, phase 1:** `basename`, `clear`, `cmp`, `cp`, `cut`, `date`, `dirname`, `env`, `expr`, `find`, `grep`, `head`, `id`, `ln`, `mkdir`, `mktemp`, `mv`, `printf`, `rm`, `rmdir`, `sed`, `seq`, `sleep`, `sort`, `stat`, `tail`, `tee`, `touch`, `tr`, `uname`, `uniq`, `wc`, `which`, `xargs`, `yes`.
 
 **Phase 2 (depending on kernel support):** `awk`, `chmod`, `chown`, `dd`, `df`, `du`, `file`, `gzip`, `gunzip`, `less`, `more`, `od`, `paste`, `ps`, `tar`, `time`, `timeout`, `top`, `tty`, `vi`.
 
@@ -242,14 +263,14 @@ The grammar test validates parsing only. The implemented MVP commands are listed
 
 ## Roadmap
 
-1. **Done:** browser app launch, LVGL window, event-driven line editing with cursor/history, simple-command execution, and the six-command shell guest.
-2. **Next:** define directory enumeration and per-app working-directory behavior in the VFS; then add `ls` and `cd` with tests.
+1. **Done:** browser app launch, LVGL window, event-driven line editing with cursor/history, simple-command execution, and the eight-command shell guest.
+2. **Done in reference tests:** directory enumeration, bounded ls/cd/pwd, isolated cwd and cleanup.
 3. **Later:** writable files, redirection, pipelines, expansion, and process/job semantics, each behind an explicit host contract.
 4. **Long term:** persistence improvements and differential tests for the POSIX shell features MaiaOS chooses to support.
 
 ## Next acceptance criteria
 
-Add VFS directory enumeration and a shell-local working directory, then verify `ls` and `cd` without changing the browser URL. Keep the existing smoke checks for command output, stderr, process exit, and nonblocking input; add pipeline and redirection criteria only after those host contracts exist.
+Review directory navigation interactively in the simulator. The next bounded addition can generalize read-only `cat` to VFS-authorized relative/absolute paths using the same cwd; specify behavior and tests first. Keep stderr, cleanup and nonblocking I/O regressions; process spawning and writable redirection need separate contracts.
 
 ## References
 

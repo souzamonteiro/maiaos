@@ -43,7 +43,12 @@ const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const labels = new Map();
 let nextLabel = 1;
 let exitCode = null;
-const vfs = new MemoryVfsAdapter({ appId: manifest.id });
+const vfs = new MemoryVfsAdapter({ appId: manifest.id, maxOpenFiles: manifest.limits.openFiles, files: {
+  "/shared/folder with space/child/note.txt": "fixture",
+  "/shared/names/é": "unicode", "/shared/names/\x1b[2J": "control",
+  "/shared/names/a\nb": "newline", "/shared/names/back\\slash": "backslash",
+} });
+for (let index = 0; index < 1024; ++index) vfs.files.set(`/shared/large/item${String(index).padStart(4, "0")}`, new Uint8Array(0));
 const broker = new MaiaStreamBroker();
 bindShellStreams(broker, 2, 3);
 let ioExitCode = null;
@@ -155,7 +160,7 @@ submitText("cat /system/welcome.txt");
 const longEcho = `${"A".repeat(70)} ${"B".repeat(70)}`;
 submitText(`echo ${longEcho}`);
 const priorOutput = labels.get(outputHandle);
-assert.match(priorOutput, /Commands: help, echo, pwd, cat \/system\/welcome\.txt, clear, exit/);
+assert.match(priorOutput, /Commands: help, echo, pwd, ls \[path\], cd \[path\], cat \/system\/welcome\.txt, clear, exit/);
 assert.match(priorOutput, /echo hello\nhello/);
 assert.match(priorOutput, /pwd\n\/\n/);
 assert.match(priorOutput, /C\+\+ kernel read this text through maia\.vfs/);
@@ -196,6 +201,40 @@ for (const [source, expected] of commandCases) {
   assert.equal(labels.get(inputHandle), "maia> |", source);
   assert.equal(guest.exports.__stack_ptr.value, stackBefore, source);
 }
+const directoryCases = [
+  ["ls", "apps/\nhome/\nshared/\nsystem/\ntmp/\n"],
+  ["ls /system", "welcome.txt\n"],
+  ["cd /system", ""], ["pwd", "/system\n"], ["ls .", "welcome.txt\n"],
+  ["cd /system/welcome.txt", "cd: not a directory\n"], ["pwd", "/system\n"],
+  ["cd missing", "cd: no such directory\n"], ["pwd", "/system\n"],
+  ["cd /home/another", "cd: permission denied\n"], ["pwd", "/system\n"],
+  ["cd ..", ""], ["cd ..", ""], ["pwd", "/\n"],
+  ["cd //shared/./", ""], ['cd "folder with space"', ""],
+  ["pwd", "/shared/folder with space\n"], ["ls", "child/\n"],
+  ["cd child/../../names", ""], ["pwd", "/shared/names\n"],
+  ["ls", "\\x1B[2J\na\\x0Ab\nback\\\\slash\né\n"],
+  ["cd", ""], ["pwd", "/home/org.maiaplatform.shell\n"], ["ls", ""],
+  ["ls /home", "org.maiaplatform.shell/\n"],
+  ["ls -l", "usage: ls [path]\n"], ["cd -", "usage: cd [path]\n"],
+  ["ls a b", "usage: ls [path]\n"], ["cd a b", "usage: cd [path]\n"],
+  ['cd ""', "cd: invalid path or directory entry\n"],
+  ["cd /", ""],
+];
+for (const [source, expected] of directoryCases) {
+  submitText("clear"); submitText(source);
+  assert.equal(labels.get(outputHandle), `maia> ${source}\n${expected}`, source);
+  assert.equal(labels.get(inputHandle), "maia> |", source);
+  assert.equal(vfs.openHandleCount, 0, source);
+  assert.equal(guest.exports.__stack_ptr.value, stackBefore, source);
+}
+submitText("clear");
+const stepsBeforeListing = kernelSteps;
+submitText("ls /shared/large"); pump(256);
+assert.match(labels.get(outputHandle), /item1023\n$/);
+assert.equal(labels.get(inputHandle), "maia> |");
+assert.equal(vfs.openHandleCount, 0);
+assert.ok(kernelSteps >= stepsBeforeListing + 256, "Kernel stays scheduled during large directory output");
+assert.equal(guest.exports.__stack_ptr.value, stackBefore);
 submitText("clear");
 typeText("x".repeat(260));
 assert.equal(labels.get(inputHandle), "maia> " + "x".repeat(255) + "|");
@@ -222,4 +261,4 @@ assert.equal(io.exports.memory.buffer.byteLength / 65536, ioPages);
 assert.equal(kernel.exports.__stack_ptr.value, kernelStack);
 assert.ok(kernelSteps > 1000);
 const stepsAtExit = kernelSteps; pump(5); assert.equal(kernelSteps, stepsAtExit + 5);
-console.log(`Kernel/I/O/shell session passed${lvgl ? ` with actual LVGL (${flushCount} flushes)` : " with host callbacks"}: generated lexer/parser, commands, quoting, invalid/unsupported input, bounds, 1000 repeated parses, stable stack/memory (shell ${initialPages}, I/O ${ioPages} pages), ${kernelSteps} kernel steps, drained/closed streams.`);
+console.log(`Kernel/I/O/shell session passed${lvgl ? ` with actual LVGL (${flushCount} flushes)` : " with host callbacks"}: generated lexer/parser, commands, quoting, invalid/unsupported input, bounds, ls/cd/cwd/escaped names, 1024-entry ls, 1000 repeated parses, stable stack/memory (shell ${initialPages}, I/O ${ioPages} pages), ${kernelSteps} kernel steps, drained/closed streams.`);

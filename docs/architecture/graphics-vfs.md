@@ -24,6 +24,16 @@ LVGL is initialized and ticked by the platform host. The browser uses `requestAn
 
 Initial mounts: `/system` (read-only to normal apps), `/apps` (installed packages), `/home/<app-id>` (private writable data), `/tmp` (volatile), `/shared` (permission-controlled). Paths are normalized and checked against root traversal. VFS adapters bind an app ID and deny access to another app's `/home` subtree. The browser host hydrates only that app's home subtree plus `/shared` from IndexedDB, keeps synchronous operations in a bounded memory cache, and persists mutations asynchronously. `/tmp` and the Node reference adapter remain in memory only. Device microSD/FAT is a future host. Handle-based I/O, quotas and open-file limits are required.
 
+The approved directory extension adds `maia.vfs.opendir/readdir`, with existing
+close and shared file/directory handle quotas. Both adapters derive authorized
+directory snapshots from their file views: sorted UTF-8 entries, bounded names,
+entry counts and retained bytes. The shell alone owns cwd and logical path
+resolution; I/O still owns terminal editing/rendering. See
+[ABI v0](../specifications/abi-v0.md) for packet, privacy and lifecycle details.
+The browser applies manifest openFiles quotas (host maximum 16) and releases all
+VFS handles on process exit, failed startup or trap. Directory state/cwd is not
+persisted; native-device directory callbacks remain future work.
+
 ## Event model
 
 Each application owns an event queue. `maia.events.poll` yields events: UI click, key, touch, timer, app message, filesystem notification and shutdown. Events are copied into guest memory after checking buffer bounds. Callbacks may be added later; polling is simplest for v0.

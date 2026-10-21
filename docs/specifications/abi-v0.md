@@ -14,6 +14,8 @@
 | `maia.vfs`     | `open(path_ptr:i32, len:i32, flags:i32) -> i32`       | Returns file handle       |
 | `maia.vfs`     | `read(fd:i32, out_ptr:i32, count:i32) -> i32`         | Bytes read or error       |
 | `maia.vfs`     | `write(fd:i32, in_ptr:i32, count:i32) -> i32`         | Bytes written or error    |
+| `maia.vfs`     | `opendir(path_ptr:i32, length:i32) -> i32` | Open directory snapshot |
+| `maia.vfs`     | `readdir(fd:i32, out_ptr:i32, capacity:i32) -> i32` | One complete directory entry or EOF |
 | `maia.vfs`     | `close(fd:i32) -> i32`                                | Closes file handle        |
 | `maia.stream`  | `read(handle:i32, out_ptr:i32, capacity:i32) -> i32` | Copied bytes, EOF or status |
 | `maia.stream`  | `write(handle:i32, ptr:i32, length:i32) -> i32` | Partial copied write or status |
@@ -23,7 +25,7 @@
 
 ## Status codes
 
-`0 = OK`; negative values are `-1 = INVALID_ARGUMENT`, `-2 = NOT_FOUND`, `-3 = PERMISSION_DENIED`, `-4 = OUT_OF_MEMORY`, `-5 = UNSUPPORTED`, `-6 = WOULD_BLOCK`, `-7 = INVALID_HANDLE`, and `-8 = CLOSED` (stream reader closed). `-5` is reserved and is not returned by the current embedded profile. Calls returning handles use positive values on success; reads and writes return nonnegative byte counts, with zero indicating EOF for reads. Negative failures must never be confused with valid handles or byte counts.
+`0 = OK`; negative values are `-1 = INVALID_ARGUMENT`, `-2 = NOT_FOUND`, `-3 = PERMISSION_DENIED`, `-4 = OUT_OF_MEMORY`, `-5 = UNSUPPORTED`, `-6 = WOULD_BLOCK`, `-7 = INVALID_HANDLE`, `-8 = CLOSED` (stream reader closed), and `-9 = NOT_DIRECTORY`. `-5` is reserved and is not returned by the current embedded profile. Calls returning handles use positive values on success; reads and writes return nonnegative byte counts, with zero indicating EOF for reads. Negative failures must never be confused with valid handles or byte counts.
 
 ## Event packet v0
 
@@ -180,6 +182,70 @@ Checks: `npm test`, `npm run test:io-streams`, `npm run test:shell-host`,
 `npm run test:shell-lvgl`, `npm run test:shell-boot`, `npm run test:lvgl-host`.
 These exercise actual guest WASM on the native reference engine and actual LVGL
 in the GUI checks; they do not establish browser interaction or device conformance.
+
+## Directory enumeration reference extension
+
+Owner-approved additive extension, implemented 2026-10-20. Imports `maia.vfs.opendir`
+and `maia.vfs.readdir` map to capabilities `vfs.opendir` and `vfs.readdir`;
+`maia.vfs.close` closes both file and directory handles. Imports are available
+only if the adapter provides both directory operations. Each guest requests the
+capabilities and the host independently grants them. Existing signatures remain.
+
+`opendir` takes an absolute, strict UTF-8 path of 1..1023 bytes and returns a
+positive snapshot handle. Directory handles share the adapter's file-handle
+namespace/quota; stream handles remain separate. Files/ancestors required as
+directories return -9; missing directories -2; denied private homes -3; invalid
+encoding/path -1; quota or snapshot size exhaustion -4. Normalize and authorize
+before checking existence; the caller cannot probe another application's home.
+Read/write on directory handles and readdir on file handles return -1; unknown
+or closed handles return -7. Close succeeds once. Process exit/trap/failed startup
+releases all VFS handles. The browser passes the manifest openFiles limit through
+to both VFS adapters, capped at 16; the shell keeps its existing budget of 4.
+
+`readdir` accepts capacity 16..4096 and returns one complete entry, or 0 at EOF.
+The complete requested memory range is checked before advancing the cursor.
+A valid buffer smaller than the next packet returns -4 without changing memory
+or cursor; invalid size/range returns -1. Header fields are explicit little-endian
+u32 values; no native pointers, padding or implicit terminator:
+
+| Offset | Field | Value |
+|---|---|---|
+| 0 | version | 1 |
+| 4 | type | 1 file, 2 directory |
+| 8 | name_length | 1..255 UTF-8 bytes |
+| 12 | reserved | 0 |
+| 16 | name bytes | Exactly name_length bytes, no slash/NUL/terminator |
+
+Return count is `16 + name_length` (at most 271). The `/system/welcome.txt`
+entry is 27 bytes. Snapshot entries are sorted by UTF-8 byte order and limited
+to 1024 entries / 64KiB of serialized packets. Malformed UTF-8 names fail opening
+with -1; oversized names/snapshots fail atomically with -4. Later file mutations
+appear only in a fresh snapshot. These limits bound retained memory, not VM fuel.
+
+The reference backend infers directories from authorized file paths. Root,
+`/system`, `/apps`, `/home`, `/tmp`, `/shared`, and the caller's own home always
+exist, even when empty. `/home` lists only the caller's ID. It does not enumerate
+browser app catalogs or native host paths. Empty arbitrary directories are not
+represented without future mkdir/storage semantics. Ambiguous file/ancestor
+names fail directory opening with -9; existing files are never silently rewritten.
+The IndexedDB adapter derives the same view after private-home/shared hydration.
+
+The C++98 shell owns cwd, initially `/`, and lexically normalizes relative paths,
+`.` and `..` (clamped at root), rejecting normalized paths longer than 1023 bytes.
+`cd [path]` validates by opening/closing a directory before updating cwd; no operand
+selects `/home/org.maiaplatform.shell`. `pwd` reports that instance's cwd. `ls [path]`
+defaults to cwd, lists immediate children including dot-prefixed names, omits
+`.`/`..`, appends `/` to directories, and escapes backslash/control bytes before
+sending output through its existing bounded stream queue. It resumes listing
+across steps/backpressure and closes the snapshot at EOF/error/exit. Guest code
+validates entry packet headers, type, lengths and forbidden name bytes before
+printing. I/O still owns the real LVGL terminal; the kernel remains scheduled.
+
+No options, symlinks, HOME/OLDPWD expansion, mutable directory APIs, general cat,
+spawn, pipelines or full POSIX behavior are added. Browser URL and host cwd remain
+unchanged. See [the approved contract](../planning/SHELL_VFS_DIRECTORIES.md).
+Checks: `npm test`, `npm run test:shell-directories`, `npm run test:shell-lvgl`,
+`npm run test:shell-boot`, `npm run test:io-streams`, `npm run test:lvgl-host`.
 
 ## Evolution
 

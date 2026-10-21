@@ -2,6 +2,86 @@
 
 ## Current objective/result
 
+### Approved directory navigation slice implemented — 2026-10-20
+
+Owner explicitly approved `docs/planning/SHELL_VFS_DIRECTORIES.md`: opendir and
+readdir imports/capabilities, NOT_DIRECTORY(-9), bounded snapshots, shell-local
+cwd and ls/cd/pwd plus reference tests. The implementation approval excluded
+publication; on 2026-10-21 the owner explicitly authorized commit and push of this
+complete MaiaOS slice. Compiler changes, version bumps and npm remain outside
+scope. This publication follows baseline `160befe`; its resulting commit and
+remote synchronization are reported in the final chat outcome. The initial
+audit was documentation-only and its pending-approval status is superseded.
+
+Implemented only in principal MaiaOS:
+- `runtime/maia-vfs.js`: typed file/directory handles, strict bounded directory
+  snapshots sorted by UTF-8 bytes, private-home filtering, virtual mount/own-home
+  directories, atomic size/quota/ambiguity errors, complete versioned entry
+  packets and closeAll lifecycle cleanup. IndexedDB-hydrated views use the same
+  directory implementation; no persistent cwd/directory metadata was invented.
+- Host imports/capabilities: conditional exact opendir/readdir bindings, whole
+  buffer validation before cursor changes, no unsupported-adapter fallback;
+  process exit and explicit teardown close VFS handles. Main.js passes manifest
+  openFiles (host cap 16) to memory/IndexedDB adapters and closes handles on traps.
+- C++98 shell: real per-instance cwd (initial `/`), bounded logical absolute/
+  relative path resolution with dot/dotdot (root-clamped), cd validates via
+  opendir/close before changing cwd; no-operand cd selects its own home. ls yields
+  under stream backpressure, validates packets, escapes controls/backslashes,
+  appends slash to directories and closes its snapshot on EOF/error/exit.
+  Path normalization has scratch space for cwd+operand, so a final 1023-byte
+  path remains valid even when an intermediate append is removed by dotdot.
+  Cat remains limited to its old operand. Help now lists eight commands.
+- Updated shell manifest, reproducible shell.wasm, build/test commands, ABI,
+  architecture, README and approved plan. New tests: VFS directories and actual
+  shell WASM directory stress; expanded real LVGL session and production boot
+  lifecycle tests. Parser/lexer sources, EBNF/generated headers and compilers
+  are unchanged. No GUI/terminal moved to JavaScript; I/O remains real LVGL guest.
+
+Verification PASS:
+- `npm run build:shell -- --check-c89`: 1193137-byte WASM, strict C89 syntax check;
+  pinned MaiaCpp -> C89 -> MaiaC/MaiaWASM produces all guest code.
+- `npm test`: 38 tests; packet/cursor canaries, malformed UTF-8, bounded snapshots,
+  isolation, typed handles/quotas/reuse, close cleanup, hydrated adapter view.
+- `npm run test:shell-directories`: 1024 entries through 31-byte ring without loss,
+  two isolated cwd instances, 1000 ls/cd cycles, exact 1023-byte normalized path
+  bounds, denied capabilities, malformed packets, EOF during final ls and closed
+  terminal while a snapshot is open; stable guest stacks and memories.
+- `npm run test:shell-host` / `npm run test:shell-lvgl`: eight commands, existing
+  editing/quote/syntax/error/bounds regressions, directory paths/escaped controls,
+  1024-entry real LVGL output and 1000 repeat parses; shell 18 and I/O 2 pages stable,
+  71111 kernel steps, no surviving VFS handles/streams. Latest LVGL 2136 flushes
+  (render timing changes this count).
+- `npm run test:shell-boot`: production boot functions with actual WASM/LVGL,
+  25 launch/exit cycles, failed startup, manifest limits, unchanged URL, directory
+  import trap with live handle, zero surviving windows/VFS handles/endpoints.
+- `npm run test:io-streams` and `npm run test:lvgl-host`: previous streams +
+  kernel/Calculator/Clock regressions PASS. JS syntax/diff whitespace PASS.
+Local HTTP checks PASS: shell WASM/manifest, VFS adapter and browser main.js
+return 200 and match current local bytes; server remains at localhost:8080.
+All seven principal dependency repositories are clean, and EBNF/generated parser/
+Regex headers were compared byte-for-byte against HEAD without differences.
+Logs: `/tmp/maia-vfs-shell-build.log`, `/tmp/maia-vfs-directory-unit.log`,
+`/tmp/maia-vfs-test-{shell-directories,shell-host,shell-lvgl,shell-boot,io-streams}.log`,
+`/tmp/maia-vfs-other-apps.log`. Prior 5356-case JS/native/WASM differential baseline
+remains unchanged; not rerun here because grammar/generated sources did not change.
+
+Browser interactive/touch/fullscreen and native-device/MaiaWASMVM validation are
+UNRUN. Directory adapter IndexedDB hydration used a storage fixture, not a real
+browser persistence test. No POSIX options, symlinks, arbitrary mkdir/unlink,
+spawning/pipelines or general cat are claimed. Initial input/word/terminal limits
+remain unchanged. Publication of this feature is now explicitly authorized.
+Compiler packages remain
+1.6.0, and no compiler source or dependency pin changed.
+
+Next safe action: owner refreshes simulator and checks `ls`, `cd /system`, `pwd`,
+`ls`, `cd ..`, `cd` and `ls /home`.
+Further shell development can broaden read-only cat path handling using the same
+cwd/VFS authorization, with explicit behavior/tests before further API additions.
+Publication verification (2026-10-21): unit, directory WASM stress, actual LVGL
+shell session, boot lifecycle, streams and kernel/Calculator/Clock regressions
+were rerun before committing. Logs: `/tmp/maiaos-directory-publication-*.log`.
+Historical sections below describe earlier snapshots and are superseded here.
+
 ### Approved release synchronization + real shell/I/O slice — 2026-10-20
 
 Owner approved the concrete stream/I/O proposal in
@@ -74,7 +154,7 @@ Verification PASS:
   quotas, ring wrap, aliases, atomic boot rollback, peer closure and cleanup.
 - `npm run test:io-streams`: actual I/O/shell WASM, fragmented UTF-8 and clear,
   long UTF-8 live-line bounds, EOF with queued Enter, canonical-input pressure,
-  closed peer,18000-byte VFS cat through31-byte ring, unterminated stdin EOF,
+  closed peer,18000-byte VFS cat through 31-byte ring, unterminated stdin EOF,
   oversized-input recovery,25 clean fresh-guest sessions on one reused broker.
 - `npm run test:shell-host` and `npm run test:shell-lvgl`: actual kernel/I/O/shell,
   all six commands, quotes/comments/errors/unsupported/bounds, editing/history,
@@ -95,7 +175,7 @@ Logs `/tmp/maia-stream-{unit,guests,session-host,session-lvgl,boot,other-apps,eq
 
 Browser visual/fullscreen/touch smoke is UNRUN. Browser skill setup/troubleshooting
 retried; `agent.browsers.list()` returns[]. Do not use an unrelated backend or
-claim screenshots/browser interaction. The running server atlocalhost:8080 serves
+claim screenshots/browser interaction. The running server at localhost:8080 serves
 new files; owner can refresh, select Maia Shell and run it. The Node production
 boot-function harness is explicitly not browser interaction verification.
 
