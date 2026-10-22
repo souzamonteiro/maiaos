@@ -29,6 +29,13 @@ transports directory packets and stream bytes; pattern matching and enumeration
 remain in the guest. `ls` accepts multiple file/directory operands; `cat` concatenates files sequentially and remains read-only. These additions do not change the public host ABI,
 capabilities, stream contract or rendering responsibilities.
 
+The stdout redirection extension adds approved APPEND semantics to existing VFS
+flags and requests vfs.write. The shell owns AST interpretation, expansion and
+command output state. Host adapters share bounded backing records and serialized
+persistence, while retaining separate authorization and handle tables. I/O still
+owns LVGL; host JavaScript does not execute commands. See
+[the approved output contract](../planning/SHELL_OUTPUT_REDIRECTION.md).
+
 ## Execution options
 
 - **Development**: browser or Node native WebAssembly engine as a temporary reference backend, with LVGL as the UI renderer. Browser JavaScript only presents LVGL's flushed image buffers; it does not draw widgets. This is not evidence of MaiaVM correctness.

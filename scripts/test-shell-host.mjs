@@ -188,7 +188,7 @@ const commandCases = [
   ["echo tail\\", "syntax error\n"],
   ["echo |", "syntax error\n"],
   ["echo hidden | pwd", "unsupported syntax: simple commands only\n"],
-  ["echo hidden > output.txt", "unsupported syntax: simple commands only\n"],
+  ["echo hidden < input.txt", "unsupported syntax: simple commands only\n"],
   ["name=value echo hidden", "unsupported syntax: simple commands only\n"],
   ["if true; then echo hidden; fi", "unsupported syntax: simple commands only\n"],
   ["(".repeat(14) + "echo x" + ")".repeat(14), "unsupported syntax: simple commands only\n"],
@@ -250,6 +250,21 @@ const fileCases = [
   ["cd /", ""],
 ];
 for (const [source, expected] of fileCases) {
+  submitText("clear"); submitText(source);
+  assert.equal(labels.get(outputHandle), `maia> ${source}\n${expected}`, source);
+  assert.equal(labels.get(inputHandle), "maia> |", source);
+  assert.equal(vfs.openHandleCount, 0, source);
+  assert.equal(guest.exports.__stack_ptr.value, stackBefore, source);
+}
+const redirectionCases = [
+  ["echo first > /tmp/lvgl-output", ""],
+  ["echo second >> /tmp/lvgl-output", ""],
+  ["cat /tmp/lvgl-output", "first\nsecond\n"],
+  ["cat /shared/cat-batch/*.txt > /tmp/lvgl-output", ""],
+  ["cat /tmp/lvgl-output", "A\nB\n"],
+  ["echo denied > /system/denied", "shell: redirection: permission denied\n"],
+];
+for (const [source, expected] of redirectionCases) {
   submitText("clear"); submitText(source);
   assert.equal(labels.get(outputHandle), `maia> ${source}\n${expected}`, source);
   assert.equal(labels.get(inputHandle), "maia> |", source);

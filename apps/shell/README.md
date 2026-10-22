@@ -37,7 +37,7 @@ The shell grammar source is `apps/shell/maia-shell.ebnf`. Parser generation is o
 
 The current grammar is exercised through `ParseTreeCollector` fixtures. Valid fixtures cover simple commands, assignments, redirections, pipelines, AND/OR lists, comments, quoting, compound groups and loops. Invalid fixtures cover repeated separators and adjacent pipeline operators. This verifies generation and the declared subset only; it does not replace the POSIX lexical-convention rules.
 
-The test runner reads this exact `maia-shell.ebnf` file and regenerates a temporary JavaScript parser on every run. This validates the declared grammar subset only. The runtime guest embeds the generated C++98 lexer/parser. Its bounded tree adapter and simple-command dispatcher are separate from generated syntax. MaiaCC grammar coverage is not a claim that compound commands, assignments or redirections execute.
+The test runner reads this exact `maia-shell.ebnf` file and regenerates a temporary JavaScript parser on every run. This validates the declared grammar subset only. The runtime guest embeds the generated C++98 lexer/parser. Its bounded tree adapter and simple-command dispatcher are separate from generated syntax. MaiaCC grammar coverage is not a claim that compound commands or assignments execute. Stdout redirection is the separately tested extension described below.
 
 ## Current MVP behavior
 
@@ -87,9 +87,9 @@ MaiaC/MaiaWASM; Emscripten builds only the separate platform LVGL module.
 | Minimal command executor | Implemented and tested: `help`, `echo`, `pwd`, `ls`, `cd`, `cat <file> [file ...]`, `clear`, `exit`. |
 | Browser host smoke | Existing MVP had interactive verification. This integration is tested through Node and the real LVGL-WASM callbacks; interactive browser verification was not rerun for this change. |
 | Directory navigation | Implemented: bounded `ls [path ...]`, `cd [path]`, real per-instance `pwd`; own-home isolation and escaped control bytes. |
-| Mutable filesystem commands | Not implemented; mkdir/unlink and write/redirection semantics need their own contracts/tests. |
+| Mutable filesystem commands | Not implemented; mkdir/unlink remain future work; stdout file redirection follows the approved bounded VFS contract. |
 | Filename expansion | MaiaGlob guest compiler/walker, quote masks, per-word byte sorting and atomic argv limits; see the consumer plan and its current validation status. |
-| Pipelines, redirection, other expansions, jobs, and POSIX conformance | Future work; not required for this MVP. |
+| Pipelines, input/descriptor redirection, other expansions, jobs, and POSIX conformance | Future work; not required for this MVP. |
 
 The current reference vertical slice is **kernel + I/O service + shell app + real LVGL callbacks**, with bounded copied-byte streams. Device firmware/MaiaWASMVM integration is still pending.
 
@@ -252,8 +252,8 @@ UTF-8 bytes. Directory names end in `/`; backslash and ASCII control bytes are
 escaped. Each snapshot is bounded at 1024 entries / 64KiB; entry names at 255 UTF-8
 bytes. The shell yields/resumes under output backpressure, preserving all entries,
 and closes the directory on EOF/error/exit. Missing, denied and non-directory
-paths have distinct errors. Arbitrary empty directories/mkdir/unlink, file
-mutation and redirection are not implemented. See the
+paths have distinct errors. Arbitrary empty directories/mkdir/unlink remain
+unimplemented. Stdout file redirection is supported by the separate extension below. See the
 [approved contract](../../docs/planning/SHELL_VFS_DIRECTORIES.md) for packet/limits
 and snapshot semantics. `npm run test:shell-directories` checks actual WASM,
 1024-entry output through a 31-byte ring, independent cwd instances, repeated
@@ -300,12 +300,12 @@ The grammar test validates parsing only. The implemented MVP commands are listed
 
 1. **Done:** browser app launch, LVGL window, event-driven line editing with cursor/history, simple-command execution, and the eight-command shell guest.
 2. **Done in reference tests:** directory enumeration, bounded ls/cd/pwd, isolated cwd and cleanup.
-3. **Later:** writable files, redirection, pipelines, expansion, and process/job semantics, each behind an explicit host contract.
+3. **Later:** input/descriptor redirection, pipelines, other expansion and process/job semantics, each behind an explicit host contract.
 4. **Long term:** persistence improvements and differential tests for the POSIX shell features MaiaOS chooses to support.
 
 ## Next acceptance criteria
 
-Review directory navigation interactively in the simulator. Read-only `cat` now supports VFS-authorized relative/absolute paths using the same cwd; review file output interactively. Keep stderr, cleanup and nonblocking I/O regressions; process spawning and writable redirection need separate contracts.
+Review directory navigation interactively in the simulator. Read-only `cat` now supports VFS-authorized relative/absolute paths using the same cwd; review file output interactively. Keep stderr, cleanup and nonblocking I/O regressions; process spawning and pipelines need their own kernel lifecycle contract.
 
 ## References
 
@@ -330,3 +330,25 @@ multiple ls operands, limits, privacy, cooperative traversal and cleanup. See
 Shell limits remain 255 input bytes, 32 tokens, 12 argv slots and 95 bytes per
 decoded word. No brace/extglob/globstar, variable expansion, command substitution,
 locale collation or POSIX-completeness claim is made.
+
+
+## Stdout file redirection
+
+`echo hello > /tmp/note` creates/truncates a file; `echo more >> /tmp/note` appends.
+`cat a b > out` writes exact concatenated bytes. One redirect may precede, follow
+or occur between command words. Its quoted/glob target must expand to one path;
+ambiguous expansion fails before file mutation. Target opening precedes builtin
+execution, so usage errors can still create/truncate an output file. Redirecting
+a file onto itself with `>` truncates before cat opens its input.
+
+Only command stdout is redirected; diagnostics and the final prompt stay on the
+terminal. File errors preserve accepted bytes, cancel remaining command work and
+release handles. Writes yield across bounded partial transfers. The browser
+shares backing records while enforcing private application homes and handles;
+IndexedDB persistence remains asynchronous and errors are reported by the host.
+This does not implement fsync or claim microSD durability. Numbered/input/multiple
+redirects, pipelines and compound execution are rejected before dispatch.
+
+Build: `npm run build:shell -- --check-c89`. Validate with
+`npm run test:shell-redirection`, `npm test` and `npm run test:shell-lvgl`.
+See the [approved contract](../../docs/planning/SHELL_OUTPUT_REDIRECTION.md).

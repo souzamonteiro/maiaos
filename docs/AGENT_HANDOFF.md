@@ -2,6 +2,66 @@
 
 ## Current objective/result
 
+### Current checkpoint — 2026-10-22, stdout redirection complete locally
+
+The owner said "Pode seguir" after both publication and precise redirection
+contract requests. Authorized publication is complete: MaiaCpp fd6730f, MaiaJS
+58e5aff, MaiaGlob b82c0ce, MaiaOS 7b06d44. No versions/npm/history rewrite.
+All principal dependency repositories are clean. MaiaOS recursively consumes
+published origin/main ancestors; all 34 initialized gitlinks are aligned. The
+previous dirty nested MaiaGlob/maiacpp checkout has been resolved by consuming
+the published parent pin, without reverting user work.
+
+Third slice implemented locally: single simple-command stdout > / >>, interpreted
+from the unchanged MaiaCC-generated AST; quote-aware MaiaGlob target expansion,
+ambiguous-target rejection before open, flags14/22, cooperative partial-write
+queue, accepted-prefix failure cleanup, terminal stderr/prompt and EOF/exit/trap
+cleanup. New existing-capability request vfs.write; browser already explicitly
+grants it. No new import signature/status. The actual shell WASM is 1261455 bytes.
+
+Reference VFS adds approved APPEND=16, shared MaiaVfsStore records with private
+adapter authorization/handles, 4096-byte writes, 1MiB files, 8MiB/4096 writable
+records, atomic quota rejection and path/directory conflict checks. One browser
+store/DB hydration/persistence queue, coalesced pending record updates, legacy
+kernel-home migration and explicit asynchronous failure reporting. Store DB
+lifetime is the browser boot lifetime, not each process exit. No durability claim.
+
+Verification PASS:
+- npm run build:shell -- --check-c89 (published own Cpp -> C89 -> MaiaC/WASM).
+- npm test: 47 passed / 0 failed.
+- npm run test:shell-redirection: binary concatenation, truncate/append, target
+  positions/quotes/glob/ambiguity, capabilities, private/readonly paths, partial
+  writes/retries, prefix errors, EOF/exit, cleanup and stable guest stack/memory.
+- test:shell-files, test:shell-glob, test:shell-directories, test:shell-boot,
+  test:shell-lvgl, test:io-streams, test:lvgl-host all passed. Boot includes a real
+  import trap with two open redirection/cat files and host teardown releasing both.
+- Actual LVGL: 2343 flushes, 75490 kernel steps, shell18/I/O2 pages stable.
+- test:shell-equivalence: 5356 exact JS/native C++98/WASM tokens/UTF16 offsets/trees;
+  2400 accepted, 2136 syntax errors, 820 lexical errors; stack restored.
+- test:shell-grammar and test:shell-parser passed; generated frontend unchanged.
+- git diff --check passed; submodule foreach recursive origin/main ancestry passed.
+Logs: /tmp/maiaos-redirection-{build,unit,functional,regressions,boot,lvgl,parity}.log.
+No interactive browser/device test or MaiaWASMVM correctness claim.
+
+Files for this local third slice: shell.cpp/shell-glob.hpp/manifest/shell.wasm,
+maia-vfs.js/new maia-vfs-store.js/host-imports, browser main lifecycle, updated
+boot/LVGL tests, new tests/vfs-write.test.js and scripts/test-shell-redirection.mjs,
+package test command, README/ABI/architecture/planning docs. Changes are uncommitted
+and unpublished; existing authorization covered the prior reviewed first two
+slices and propagation. Obtain explicit publication approval for this ready set.
+
+Fourth slice has a concrete review proposal in planning/
+SHELL_PIPELINE_PROCESS_CONTRACT.md: kernel-owned process table, bounded group
+spawn/wait, scheduler/transport actions, restricted separate cat worker instances,
+explicit caller-home delegation, quotas, rollback and real LVGL acceptance tests.
+No pipeline/kernel/worker source has been changed. Obtain approval of these new
+interfaces and delegation before implementing; never replace kernel lifecycle
+policy with a JavaScript command executor. Pipeline+redirection composition is
+explicitly outside the proposed initial pipeline slice. The MaiaRegex dense memo
+performance concern from the full bootstrap remains separately documented in
+MaiaCpp docs/LEGACY_C89_DIAGNOSTICS.md; correctness passed, optimization not done.
+
+
 ### Active next steps — owner-approved order (2026-10-21)
 
 Owner explicitly approved: multi-file cat; fix four legacy emitted-C diagnostics

@@ -89,14 +89,26 @@ memory32. Its exact imports are:
 | `maia.vfs.close`          | `(i32 handle) -> i32 status`                               | Close an open-file handle          |
 | `maia.log.write`          | `(i32 level, i32 text_ptr, i32 text_len) -> i32 status`    | Write bounded diagnostic text      |
 
-VFS flags are bitwise: `READ=1`, `WRITE=2`, `CREATE=4`, `TRUNCATE=8`. Paths are
-absolute UTF-8 guest paths, normalized before lookup. A host binds each VFS
-adapter to one app ID and confines that guest to `/home/<app-id>`; it allows
-writes there, under `/tmp`, and under policy-controlled `/shared`. `/system` and
-`/apps` are read-only. The browser hydrates only that app's home subtree plus
-`/shared` from IndexedDB before guest startup and persists changes asynchronously
-while VFS imports remain synchronous. `/tmp` is volatile. The device host must
-apply equivalent mount and capability policy.
+VFS flags are bitwise: `READ=1`, `WRITE=2`, `CREATE=4`, `TRUNCATE=8`,
+`APPEND=16` (accepted mask `0x1f`). APPEND requires WRITE and excludes TRUNCATE;
+invalid combinations return -1. Each append write selects current shared EOF.
+Paths are absolute UTF-8 guest paths, at most 1023 bytes, normalized before lookup.
+Each adapter authorizes `/home/<app-id>` and owns its private handle table;
+`/tmp` and `/shared` are writable and `/system` plus `/apps` remain read-only.
+Directory file targets return -1; descendants beneath files return -9.
+Writes copy at most 4096 bytes, files at most 1 MiB, writable backing records at
+most 4096 and 8 MiB total. Limits/allocation failures return -4 before mutation.
+Zero-byte writes do not change positions. Hydrated oversized records remain
+readable and can be truncated to recover space; over-limit writes fail.
+
+Browser adapters share one internal MaiaVfsStore with one IndexedDB hydration
+and persistence queue, while authorizing each operation separately. Home records
+are not exposed across applications. Legacy kernel-home migration is preserved.
+Persistent writes are coalesced per path and serialized; successful synchronous
+write/close means accepted in the bounded VFS, not durable storage. The host
+reports asynchronous persistence errors and can await flush. `/tmp` is volatile.
+Device hosts must implement equivalent authorization, serialization and limits;
+these browser tests do not validate device durability.
 
 Required exports are `memory`, `maiaos_start() -> void`, and
 `maiaos_step() -> void`. The browser launcher verifies import capabilities
@@ -279,3 +291,21 @@ Errors close the current file and continue with later operands; one prompt
 follows completion. No stdin/options/exit-status extension is introduced.
 See [multi-file contract](../planning/SHELL_CAT_MULTIPLE_FILES.md) for exact
 limits, error policy and actual WASM/LVGL verification.
+
+
+## Shell stdout redirection (2026-10-22)
+
+The approved [output contract](../planning/SHELL_OUTPUT_REDIRECTION.md) adds one
+`>` or `>>` to a simple command. The generated shell tree owns syntax; guest
+MaiaGlob expands argv and one quote-aware target. An ambiguous target fails before
+opening. Target open occurs before dispatch: `>` uses 14 and `>>` uses 22.
+The shell requests `vfs.write` and the browser explicitly grants it. No new import
+signature or status code is added. Command stdout drains to VFS; stderr, startup
+and one final prompt remain on terminal streams. Errors cancel remaining command
+work, close handles and preserve only bytes already accepted. Multiple/numbered/
+input redirects, pipelines, compound execution and process spawning remain
+unsupported. Kernel scheduling and I/O-owned LVGL rendering are unchanged.
+
+Checks: strict `build:shell -- --check-c89`, `npm test`, `test:shell-redirection`,
+`test:shell-files`, `test:shell-glob`, `test:shell-directories`, `test:shell-boot`,
+`test:shell-lvgl`, `test:io-streams`, `test:lvgl-host` and frontend equivalence.

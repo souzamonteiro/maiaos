@@ -7,6 +7,7 @@ import { createMaiaHostImports, MAIA_EVENT_KEY, MAIA_KEY_ENTER, MAIA_KEY_TEXT } 
 import { instantiateNativeWasm } from "../runtime/native-wasm.js";
 import { assertManifestCapabilities } from "../runtime/maia-capabilities.js";
 import { MaiaStreamBroker, bindShellStreams } from "../runtime/maia-streams.js";
+import { MaiaVfsStore } from "../runtime/maia-vfs-store.js";
 import { MemoryVfsAdapter } from "../runtime/maia-vfs.js";
 import { createLvglGraphicsCallbacks } from "../platform/desktop-web/lvgl-bridge.js";
 import createLvgl from "../platform/desktop-web/generated/maiaos-lvgl.js";
@@ -30,6 +31,7 @@ let failIo = false;
 const adapters = [];
 const context = vm.createContext({
   WebAssembly, URL, Uint8Array, Number, TypeError, RangeError, Error, console,
+  sharedVfsStore: new MaiaVfsStore(),
   nextProcessId: 1, runningProcesses, buttonOwners: new Map(), streamBroker: broker,
   graphicsCallbacks, createMaiaHostImports, instantiateNativeWasm, assertManifestCapabilities, bindShellStreams,
   BROWSER_HOST_GRANTS: [...new Set([...ioManifest.capabilities, ...shellManifest.capabilities])],
@@ -97,6 +99,22 @@ for (let session = 0; session < 25; ++session) {
   broker.write(io.pid, 3, new TextEncoder().encode("cat /shared/read-trap.txt\n"));
   assert.throws(() => process.runtime.exports.maiaos_step(), /file transport trap/);
   assert.equal(process.vfs.openHandleCount, 1);
+  context.stopProcess(process, 1); assert.equal(process.vfs.openHandleCount, 0);
+  for (let tick = 0; tick < 12; ++tick) {
+    lvgl._maiaos_lvgl_tick();
+    for (const item of [...runningProcesses]) item.runtime.exports[item.stepExport]();
+  }
+  empty();
+}
+// Redirection adds a second owned file; host trap cleanup releases both.
+{
+  const process = await context.startApplication(options);
+  const io = [...runningProcesses].find(item => item.role === "service");
+  process.vfs.files.set("/shared/write-trap-input", new TextEncoder().encode("fixture"));
+  process.vfs.write = () => { throw new Error("Injected output transport trap"); };
+  broker.write(io.pid, 3, new TextEncoder().encode("cat /shared/write-trap-input > /tmp/trap-output\n"));
+  assert.throws(() => process.runtime.exports.maiaos_step(), /output transport trap/);
+  assert.equal(process.vfs.openHandleCount, 2);
   context.stopProcess(process, 1); assert.equal(process.vfs.openHandleCount, 0);
   for (let tick = 0; tick < 12; ++tick) {
     lvgl._maiaos_lvgl_tick();

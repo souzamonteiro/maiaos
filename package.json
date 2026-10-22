@@ -23,6 +23,7 @@
     "test:shell-boot": "node scripts/test-shell-boot.mjs",
     "test:shell-directories": "node scripts/test-shell-directories.mjs",
     "test:shell-files": "node scripts/test-shell-files.mjs",
+    "test:shell-redirection": "node scripts/test-shell-redirection.mjs",
     "test:shell-glob": "node scripts/test-shell-glob.mjs"
   }
 }

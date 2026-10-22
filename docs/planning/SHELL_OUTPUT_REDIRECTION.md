@@ -111,3 +111,20 @@ private-home isolation, atomic quota failures, copied buffers, hydration/migrati
 and persistence-error reporting. Actual kernel/I/O/LVGL and all existing shell,
 VFS/stream/parser parity regressions must pass. Do not commit/push this proposal
 or implementation without publication authorization.
+
+
+## Implementation evidence (2026-10-22)
+
+Implemented locally with unchanged generated frontend and a 1261455-byte actual
+shell WASM. Strict C89 build and 47 unit tests passed. Actual shell redirection,
+files/glob/directories, boot, I/O and LVGL suites passed. The 5356-input frontend
+comparison remains exact across JS/native C++98/WASM, including complete trees
+and UTF-16 offsets. Real LVGL: 2343 flushes, 75490 kernel steps, shell18/I/O2 pages.
+Tests include raw binary data, slow/partial writes, ambiguous targets before any
+open, read-only/private denial, accepted-prefix errors and recovery, file quotas,
+shared interleaved append, one-time hydration/legacy migration, coalesced persistence
+queue requests, error reporting, EOF/exit and host trap cleanup of both open files.
+Persistence is asynchronous; no device durability or interactive browser QA claim.
+Publications of the preceding slices are MaiaCpp fd6730f, MaiaJS 58e5aff, MaiaGlob
+b82c0ce and MaiaOS 7b06d44. This new implementation needs its own commit/push
+approval; no additional version/npm release is included.

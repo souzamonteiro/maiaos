@@ -184,6 +184,7 @@ export function createMaiaHostImports({
     },
     "maia.vfs": {
       open: (pointer, length, flags) => {
+        if (!Number.isInteger(length) || length < 1 || length > 1023) return STATUS.INVALID_ARGUMENT;
         try {
           return vfs.open(text(pointer, length), flags);
         } catch {
@@ -204,6 +205,7 @@ export function createMaiaHostImports({
         return result.byteLength;
       },
       write: (handle, pointer, count) => {
+        if (!Number.isInteger(count) || count < 0 || count > 4096) return STATUS.INVALID_ARGUMENT;
         try {
           validateGuestRange(guestMemory, pointer, count);
         } catch {

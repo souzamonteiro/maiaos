@@ -13,6 +13,7 @@
     "memory.free",
     "vfs.open",
     "vfs.read",
+    "vfs.write",
     "vfs.close",
     "process.exit",
     "stream.read",

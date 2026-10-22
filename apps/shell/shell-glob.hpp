@@ -14,6 +14,7 @@ static unsigned int gExpansionInputCount = 0;
 static unsigned int gExpansionIndex = 0;
 static unsigned int gExpansionCount = 0;
 static unsigned int gExpansionWordStart = 0;
+static unsigned int gExpansionTargetStart = 0;
 static int globOpen(void*, const unsigned char* path, unsigned int length)
 {
     if (length > 1023) return -1;
@@ -59,7 +60,8 @@ static void endExpansion(int status)
 {
     maia_glob_walk_cancel(&gGlob->walker);
     gExpansionActive = 0; gExpansionWalking = 0;
-    if (status == MAIA_GLOB_INVALID) writeText(2, "shell: invalid filename pattern\n");
+    if (status == -100) writeText(2, "shell: ambiguous redirection\n");
+    else if (status == MAIA_GLOB_INVALID) writeText(2, "shell: invalid filename pattern\n");
     else if (status == MAIA_GLOB_LIMIT || status == MAIA_GLOB_SPACE) writeText(2, "shell: filename expansion limit exceeded\n");
     else writeText(2, "shell: filename expansion failed\n");
     if (!gInputEOF) writeText(1, kPromptText);
@@ -99,10 +101,17 @@ static void resumeExpansion(void)
         if (gExpansionIndex == gExpansionInputCount) {
             for (unsigned int i = 0; i < 1152; ++i) gCommandWords[i] = gExpandedWords[i];
             gExpansionActive = 0;
-            if (gExpansionCount) executeCommand(gExpansionCount);
-            if (!gExitRequested && !gInputEOF && gCatHandle < 0 && !gCatActive && !gLsActive) writeText(1, kPromptText);
+            unsigned int count = gExpansionCount;
+            if (gRedirectFlags) {
+                if (count - gExpansionTargetStart != 1) { endExpansion(-100); return; }
+                --count;
+                if (!beginCommandOutput(gCommandWords + count * kMaxWordBytes)) { completeCommand(); return; }
+            }
+            if (count) executeCommand(count);
+            if (!gCatActive && !gLsActive) completeCommand();
             return;
         }
+        if (gRedirectFlags && gExpansionIndex + 1 == gExpansionInputCount) gExpansionTargetStart = gExpansionCount;
         const unsigned int offset = gExpansionIndex * kMaxWordBytes;
         const char* word = gCommandWords + offset;
         const int compiled = maia_glob_compile_utf8(reinterpret_cast<const unsigned char*>(word), textLength(word),
@@ -126,7 +135,8 @@ static void resumeExpansion(void)
     const int result = maia_glob_walk_step(&gGlob->walker, path, 1024, &length, &type, 4);
     if (result == MAIA_GLOB_YIELD) return;
     if (result == MAIA_GLOB_ENTRY) {
-        if (!appendExpanded(reinterpret_cast<const char*>(path), length)) endExpansion(MAIA_GLOB_LIMIT);
+        if (!appendExpanded(reinterpret_cast<const char*>(path), length)) { endExpansion(MAIA_GLOB_LIMIT); return; }
+        if (gRedirectFlags && gExpansionIndex + 1 == gExpansionInputCount && gExpansionCount - gExpansionTargetStart > 1) endExpansion(-100);
         return;
     }
     if (result != MAIA_GLOB_DONE) { endExpansion(result); return; }

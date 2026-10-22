@@ -9,6 +9,7 @@ MAIA_IMPORT("maia.stream", "read") int32_t maia_stream_read(int32_t handle, int3
 MAIA_IMPORT("maia.stream", "write") int32_t maia_stream_write(int32_t handle, int32_t pointer, int32_t count);
 MAIA_IMPORT("maia.stream", "close") int32_t maia_stream_close(int32_t handle);
 MAIA_IMPORT("maia.vfs", "open") int32_t maia_vfs_open(int32_t pointer, int32_t length, int32_t flags);
+MAIA_IMPORT("maia.vfs", "write") int32_t maia_vfs_write(int32_t handle, int32_t pointer, int32_t count);
 MAIA_IMPORT("maia.vfs", "read") int32_t maia_vfs_read(int32_t handle, int32_t pointer, int32_t count);
 MAIA_IMPORT("maia.vfs", "opendir") int32_t maia_vfs_opendir(int32_t pointer, int32_t length);
 MAIA_IMPORT("maia.vfs", "readdir") int32_t maia_vfs_readdir(int32_t handle, int32_t pointer, int32_t capacity);
@@ -35,6 +36,9 @@ static unsigned int gLineLength = 0;
 static unsigned int gTokenCount = 0;
 static int gInputOverflow = 0;
 static int gInputEOF = 0;
+static int gRedirectHandle = -1;
+static unsigned int gRedirectFlags = 0;
+static unsigned int gCommandFinishing = 0;
 static int gCatHandle = -1;
 static unsigned int gCatActive = 0;
 static unsigned int gCatCount = 0;
@@ -100,17 +104,25 @@ static int writeBytes(int32_t stream, const char* bytes, unsigned int length)
     return static_cast<int>(length);
 }
 static int writeText(int32_t stream, const char* text) { return writeBytes(stream, text, textLength(text)); }
+static void abortCommandOutput(void);
+static void completeCommand(void) { gCommandFinishing = 1; }
 static void flushOutput(void)
 {
     for (unsigned int attempt = 0; attempt < 16 && gPendingOffset < gPendingLength; ++attempt) {
         unsigned int end = gPendingOffset + 1;
         const unsigned int stream = gPendingStream[gPendingOffset];
         while (end < gPendingLength && gPendingStream[end] == stream) ++end;
-        const int32_t result = maia_stream_write(static_cast<int32_t>(stream),
+        const int redirected = stream == 1 && gRedirectHandle >= 0;
+        const int32_t result = redirected ? maia_vfs_write(gRedirectHandle,
+            static_cast<int32_t>(reinterpret_cast<uintptr_t>(gPendingOutput + gPendingOffset)),
+            static_cast<int32_t>(end - gPendingOffset)) : maia_stream_write(static_cast<int32_t>(stream),
             static_cast<int32_t>(reinterpret_cast<uintptr_t>(gPendingOutput + gPendingOffset)),
             static_cast<int32_t>(end - gPendingOffset));
         if (result == -6) return;
-        if (result <= 0) { gFatal = 1; return; }
+        if (result <= 0 || static_cast<unsigned int>(result) > end - gPendingOffset) {
+            if (redirected) abortCommandOutput(); else gFatal = 1;
+            return;
+        }
         gPendingOffset += static_cast<unsigned int>(result);
     }
     if (gPendingOffset == gPendingLength) { gPendingOffset = 0; gPendingLength = 0; }
@@ -180,7 +192,7 @@ static void resumeCatOperands(void)
 {
     if (gCatIndex >= gCatCount) {
         gCatActive = 0;
-        if (!gInputEOF) writeText(1, kPromptText);
+        completeCommand();
         return;
     }
     const char* path = gCommandWords + gCatIndex * kMaxWordBytes;
@@ -237,7 +249,7 @@ static void writeEscaped(const char* text, unsigned int length, int newline)
 static void resumeLs(void)
 {
     if (gLsIndex >= gLsCount) {
-        gLsActive = 0; if (!gInputEOF) writeText(1, kPromptText); return;
+        gLsActive = 0; completeCommand(); return;
     }
     const unsigned int index = gLsIndex++;
     const char* operand = index == 0 ? gCwd : gCommandWords + index * kMaxWordBytes;
@@ -271,7 +283,35 @@ static void runLs(unsigned int wordCount)
     }
     gLsCount = wordCount; gLsIndex = wordCount == 1 ? 0 : 1; gLsActive = 1;
 }
+static int beginCommandOutput(const char* path)
+{
+    if (!resolvePath(path)) { writeText(2, "shell: invalid redirection path\n"); return 0; }
+    gRedirectHandle = maia_vfs_open(static_cast<int32_t>(reinterpret_cast<uintptr_t>(gResolvedPath)),
+        static_cast<int32_t>(textLength(gResolvedPath)), static_cast<int32_t>(gRedirectFlags));
+    if (gRedirectHandle <= 0) {
+        directoryError("shell: redirection", gRedirectHandle);
+        gRedirectHandle = -1; return 0;
+    }
+    return 1;
+}
 #include "shell-glob.hpp"
+
+static void abortCommandOutput(void)
+{
+    // Preserve queued stderr; discard only stdout that the VFS did not accept.
+    unsigned int kept = 0;
+    for (unsigned int i = gPendingOffset; i < gPendingLength; ++i) {
+        if (gPendingStream[i] == 2) {
+            gPendingOutput[kept] = gPendingOutput[i]; gPendingStream[kept++] = 2;
+        }
+    }
+    gPendingOffset = 0; gPendingLength = kept;
+    if (gCatHandle >= 0) { maia_vfs_close(gCatHandle); gCatHandle = -1; }
+    if (gDirectoryHandle >= 0) { maia_vfs_close(gDirectoryHandle); gDirectoryHandle = -1; }
+    if (gRedirectHandle >= 0) { maia_vfs_close(gRedirectHandle); gRedirectHandle = -1; }
+    gCatActive = 0; gLsActive = 0;
+    writeText(2, "shell: redirection write failed\n"); completeCommand();
+}
 
 static void endListing(int status)
 {
@@ -345,16 +385,36 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
 {
     *wordCount = 0;
     unsigned int simpleCommands = 0;
+    unsigned int redirections = 0;
+    gRedirectFlags = 0;
     for (unsigned int index = 0; index < tree->nodeCount; ++index) {
         const MaiaShellParseTreeNode* node = tree->nodes + index;
         if (node->kind != kShellParseTreeNonterminal) continue;
         if (textEquals(node->name, "SimpleCommand")) ++simpleCommands;
-        if (textEquals(node->name, "Assignment") || textEquals(node->name, "Redirection")) return 2;
+        if (textEquals(node->name, "Assignment")) return 2;
+        if (textEquals(node->name, "Redirection")) ++redirections;
     }
-    if (simpleCommands > 1) return 2;
+    if (simpleCommands > 1 || redirections > 1) return 2;
+    // Decode argv first, then the redirect target, regardless of source position.
+    for (unsigned int pass = 0; pass < 2; ++pass) {
     for (unsigned int index = 0; index < tree->nodeCount; ++index) {
         const MaiaShellParseTreeNode* node = tree->nodes + index;
         if (node->kind != kShellParseTreeTerminal) continue;
+        int parent = node->parent;
+        unsigned int redirected = 0;
+        while (parent >= 0) {
+            const MaiaShellParseTreeNode* ancestor = tree->nodes + parent;
+            if (textEquals(ancestor->name, "Redirection")) redirected = 1;
+            parent = ancestor->parent;
+        }
+        if ((pass == 0 && redirected) || (pass == 1 && !redirected)) continue;
+        if (redirected && node->token != MAIACC_TOKEN_WORD) {
+            if (node->parent < 0 || !textEquals(tree->nodes[node->parent].name, "RedirectionOperator")) return 2;
+            if (node->length == 1 && node->value[0] == '>') gRedirectFlags = 14;
+            else if (node->length == 2 && node->value[0] == '>' && node->value[1] == '>') gRedirectFlags = 22;
+            else return 2;
+            continue;
+        }
         if (node->token == MAIACC_TOKEN_EOF || node->token == MAIACC_TOKEN_NEWLINE) continue;
         if (node->token != MAIACC_TOKEN_WORD
             && node->token != MAIACC_TOKEN_ASSIGNMENT_WORD
@@ -392,6 +452,8 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
         putChar(word, outputLength, 0);
         ++*wordCount;
     }
+    }
+    if (redirections && (*wordCount < 2 || !gRedirectFlags)) return 2;
     return 1;
 }
 
@@ -479,6 +541,7 @@ static void finish(void)
     }
     if (gCatHandle >= 0) { maia_vfs_close(gCatHandle); gCatHandle = -1; }
     if (gDirectoryHandle >= 0) { maia_vfs_close(gDirectoryHandle); gDirectoryHandle = -1; }
+    if (gRedirectHandle >= 0) { maia_vfs_close(gRedirectHandle); gRedirectHandle = -1; }
     for (int32_t handle = 0; handle < 3; ++handle) maia_stream_close(handle);
     gExited = 1; maia_process_exit(gFatal ? 1 : 0);
 }
@@ -504,6 +567,15 @@ extern "C" __attribute__((visibility("default"))) void maiaos_step(void)
         flushOutput();
         if (gFatal) { finish(); return; }
         if (gPendingLength) return;
+        if (gCommandFinishing) {
+            if (gRedirectHandle >= 0) {
+                const int status = maia_vfs_close(gRedirectHandle); gRedirectHandle = -1;
+                if (status < 0) writeText(2, "shell: redirection close failed\n");
+            }
+            gCommandFinishing = 0;
+            if (!gExitRequested && !gInputEOF) writeText(1, kPromptText);
+            continue;
+        }
         if (gExitRequested) { finish(); return; }
         if (gExpansionActive) { resumeExpansion(); continue; }
         if (gCatHandle >= 0) { resumeCat(); continue; }

@@ -25,6 +25,9 @@ import {
 } from "/platform/desktop-web/lvgl-bridge.js";
 import { MaiaStreamBroker, bindShellStreams } from "/runtime/maia-streams.js";
 
+import { MaiaVfsStore } from "/runtime/maia-vfs-store.js";
+
+const sharedVfsStore = new MaiaVfsStore();
 const screen = document.getElementById("screen");
 const status = document.getElementById("status");
 const BROWSER_HOST_GRANTS = [
@@ -194,8 +197,7 @@ function stopProcess(process, exitCode) {
   if (typeof vfs?.flush === "function") {
     void vfs
       .flush()
-      .catch((error) => console.error("[maia vfs] flush failed", error))
-      .finally(() => vfs.database?.close());
+      .catch((error) => console.error("[maia vfs] flush failed", error));
   }
   process.runtime = null;
   process.host = null;
@@ -205,22 +207,25 @@ function stopProcess(process, exitCode) {
   }
 }
 
+function reportVfsPersistenceError(error) {
+  status.textContent = `VFS persistence failed: ${error.message}`;
+  console.error("[maia vfs] persistence failed", error);
+}
+
 async function createAppVfs(appId, requestedLimit = 16) {
   if (!Number.isInteger(requestedLimit) || requestedLimit < 0) throw new TypeError("Invalid open-file limit");
   const maxOpenFiles = Math.min(requestedLimit, 16);
   try {
     return await IndexedDbVfsAdapter.create({
       appId,
+      store: sharedVfsStore,
       maxOpenFiles,
-      onPersistenceError: (error) => {
-        status.textContent = `VFS persistence failed: ${error.message}`;
-        console.error("[maia vfs] persistence failed", error);
-      },
+      onPersistenceError: reportVfsPersistenceError,
     });
   } catch (error) {
     status.textContent = "Persistent storage unavailable; using temporary VFS.";
     console.error("[maia vfs] using temporary storage", error);
-    return new MemoryVfsAdapter({ appId, maxOpenFiles });
+    return new MemoryVfsAdapter({ appId, maxOpenFiles, store: sharedVfsStore });
   }
 }
 
