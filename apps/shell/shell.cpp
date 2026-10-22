@@ -1,5 +1,6 @@
 #define MAIACPP_USE_C_ALLOCATOR
 #include <stdint.h>
+#include "../../maiaglob/maia_glob.h"
 #include "generated/maia-shell-parser.hpp"
 #include "maia-shell-parse-tree-collector.hpp"
 #define MAIA_IMPORT(module_name, field_name) __attribute__((import_module(module_name), import_name(field_name)))
@@ -36,6 +37,12 @@ static int gInputOverflow = 0;
 static int gInputEOF = 0;
 static int gCatHandle = -1;
 static int gDirectoryHandle = -1;
+static unsigned int gLsActive = 0;
+static unsigned int gLsCount = 0;
+static unsigned int gLsIndex = 0;
+static unsigned int gLsLookup = 0;
+static const char* gLsOperand = 0;
+static char gLsBase[256];
 static char gCwd[1024] = "/";
 // Scratch also holds a maximal cwd plus one bounded operand before normalization.
 static char gResolvedPath[1152];
@@ -105,12 +112,6 @@ static void flushOutput(void)
     }
     if (gPendingOffset == gPendingLength) { gPendingOffset = 0; gPendingLength = 0; }
 }
-static void runCat(const char* path)
-{
-    gCatHandle = maia_vfs_open(static_cast<int32_t>(reinterpret_cast<uintptr_t>(path)),
-        static_cast<int32_t>(textLength(path)), kVfsRead);
-    if (gCatHandle <= 0) { gCatHandle = -1; writeText(2, "cat: cannot open file\n"); }
-}
 static void resumeCat(void)
 {
     const int32_t count = maia_vfs_read(gCatHandle,
@@ -150,6 +151,19 @@ static int resolvePath(const char* path)
     gResolvedPath[length] = 0;
     return 1;
 }
+static void runCat(const char* path)
+{
+    if (!resolvePath(path)) { writeText(2, "cat: invalid path\n"); return; }
+    gCatHandle = maia_vfs_open(static_cast<int32_t>(reinterpret_cast<uintptr_t>(gResolvedPath)),
+        static_cast<int32_t>(textLength(gResolvedPath)), kVfsRead);
+    if (gCatHandle <= 0) {
+        if (gCatHandle == -3) writeText(2, "cat: permission denied\n");
+        else if (gCatHandle == -4) writeText(2, "cat: open-file limit exceeded\n");
+        else if (gCatHandle == -1) writeText(2, "cat: invalid path\n");
+        else writeText(2, "cat: cannot open file\n");
+        gCatHandle = -1;
+    }
+}
 static void directoryError(const char* command, int status)
 {
     writeText(2, command); writeText(2, ": ");
@@ -183,23 +197,84 @@ static uint32_t directoryUint32(const uint8_t* bytes)
     return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8)
         | (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
 }
+static void writeEscaped(const char* text, unsigned int length, int newline)
+{
+    unsigned int output = 0; const char* digits = "0123456789ABCDEF";
+    for (unsigned int i = 0; i < length; ++i) {
+        const unsigned int value = static_cast<unsigned char>(text[i]);
+        if (value == 92) { gDirectoryOutput[output++] = 92; gDirectoryOutput[output++] = 92; }
+        else if (value < 32 || value == 127) {
+            gDirectoryOutput[output++] = 92; gDirectoryOutput[output++] = 'x';
+            gDirectoryOutput[output++] = digits[value >> 4]; gDirectoryOutput[output++] = digits[value & 15];
+        } else gDirectoryOutput[output++] = static_cast<char>(value);
+    }
+    if (newline) gDirectoryOutput[output++] = '\n';
+    writeBytes(1, gDirectoryOutput, output);
+}
+static void resumeLs(void)
+{
+    if (gLsIndex >= gLsCount) {
+        gLsActive = 0; if (!gInputEOF) writeText(1, kPromptText); return;
+    }
+    const unsigned int index = gLsIndex++;
+    const char* operand = index == 0 ? gCwd : gCommandWords + index * kMaxWordBytes;
+    gLsOperand = operand; gLsLookup = 0;
+    if (!resolvePath(operand)) { directoryError("ls", -1); return; }
+    int handle = maia_vfs_opendir(static_cast<int32_t>(reinterpret_cast<uintptr_t>(gResolvedPath)),
+        static_cast<int32_t>(textLength(gResolvedPath)));
+    if (handle == -9 && operand[textLength(operand) - 1] != '/') {
+        unsigned int slash = textLength(gResolvedPath);
+        while (slash && gResolvedPath[slash - 1] != '/') --slash;
+        const unsigned int length = textLength(gResolvedPath + slash);
+        if (length > 255) { directoryError("ls", -1); return; }
+        for (unsigned int i = 0; i <= length; ++i) gLsBase[i] = gResolvedPath[slash + i];
+        gResolvedPath[slash > 1 ? slash - 1 : 1] = 0;
+        handle = maia_vfs_opendir(static_cast<int32_t>(reinterpret_cast<uintptr_t>(gResolvedPath)),
+            static_cast<int32_t>(textLength(gResolvedPath)));
+        if (handle > 0) gLsLookup = 1;
+    }
+    if (handle <= 0) { directoryError("ls", handle); return; }
+    if (!gLsLookup && gLsCount > 2) {
+        writeEscaped(operand, textLength(operand), 0); writeText(1, ":\n");
+    }
+    gDirectoryHandle = handle;
+}
+static void runLs(unsigned int wordCount)
+{
+    for (unsigned int i = 1; i < wordCount; ++i) {
+        const char* operand = gCommandWords + i * kMaxWordBytes;
+        if (operand[0] == '-') { writeText(2, "usage: ls [path ...]\n"); return; }
+        if (!operand[0]) { directoryError("ls", -1); return; }
+    }
+    gLsCount = wordCount; gLsIndex = wordCount == 1 ? 0 : 1; gLsActive = 1;
+}
+#include "shell-glob.hpp"
+
 static void endListing(int status)
 {
     maia_vfs_close(gDirectoryHandle); gDirectoryHandle = -1;
     if (status < 0) directoryError("ls", status);
-    if (!gInputEOF) writeText(1, kPromptText);
 }
 static void resumeListing(void)
 {
     const int32_t count = maia_vfs_readdir(gDirectoryHandle,
         static_cast<int32_t>(reinterpret_cast<uintptr_t>(gDirectoryPacket)), 271);
-    if (count <= 0) { endListing(count); return; }
+    if (count <= 0) { endListing(count == 0 && gLsLookup ? -2 : count); return; }
     if (count < 17 || count > 271 || directoryUint32(gDirectoryPacket) != 1
         || directoryUint32(gDirectoryPacket + 12) != 0) { endListing(-1); return; }
     const unsigned int type = directoryUint32(gDirectoryPacket + 4);
     const unsigned int length = directoryUint32(gDirectoryPacket + 8);
     if ((type != 1 && type != 2) || length == 0 || length > 255
         || length + 16 != static_cast<unsigned int>(count)) { endListing(-1); return; }
+    if (gLsLookup) {
+        unsigned int same = length == textLength(gLsBase) ? 1 : 0;
+        for (unsigned int i = 0; same && i < length; ++i)
+            if (gDirectoryPacket[16 + i] != static_cast<unsigned char>(gLsBase[i])) same = 0;
+        if (!same) return;
+        if (type != 1) { endListing(-9); return; }
+        writeEscaped(gLsOperand, textLength(gLsOperand), 1);
+        endListing(0); return;
+    }
     unsigned int output = 0;
     const char* digits = "0123456789ABCDEF";
     for (unsigned int i = 0; i < length; ++i) {
@@ -264,6 +339,7 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
         if (*wordCount >= kMaxArgs) return 3;
 
         char* word = gCommandWords + (*wordCount * kMaxWordBytes);
+        unsigned char* protectedBytes = gWordProtected + (*wordCount * kMaxWordBytes);
         unsigned int outputLength = 0;
         char quote = 0;
         for (unsigned int offset = 0; offset < node->length; ++offset) {
@@ -272,13 +348,22 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
                 quote = quote ? 0 : current;
                 continue;
             }
+            unsigned int protectedByte = quote ? 1 : 0;
             if (current == 92 && quote != 39 && offset + 1 < node->length) {
-                ++offset;
-                current = node->value[offset];
+                const char next = node->value[offset + 1];
+                if (quote != 34 || next == 36 || next == 96 || next == 34 || next == 92 || next == 10) {
+                    ++offset; current = next; protectedByte = 1;
+                }
             }
             if (outputLength + 1 >= kMaxWordBytes) return 3;
-            putChar(word, outputLength, current);
+            putChar(word, outputLength, current); protectedBytes[outputLength] = static_cast<unsigned char>(protectedByte);
             ++outputLength;
+            if (protectedByte && static_cast<unsigned char>(current) >= 128) {
+                while (offset + 1 < node->length && (static_cast<unsigned char>(node->value[offset + 1]) & 192) == 128) {
+                    if (outputLength + 1 >= kMaxWordBytes) return 3;
+                    word[outputLength] = node->value[++offset]; protectedBytes[outputLength++] = 1;
+                }
+            }
         }
         if (quote) return 2;
         putChar(word, outputLength, 0);
@@ -299,7 +384,7 @@ static int parseSimpleCommand(unsigned int* wordCount)
 
 static void printHelp(void)
 {
-    writeText(1, "Commands: help, echo, pwd, ls [path], cd [path], cat /system/welcome.txt, clear, exit\n");
+    writeText(1, "Commands: help, echo, pwd, ls [path ...], cd [path], cat <file>, clear, exit\n");
 }
 
 static void executeCommand(unsigned int wordCount)
@@ -316,11 +401,14 @@ static void executeCommand(unsigned int wordCount)
         writeText(1, "\n");
     } else if (textEquals(command, "pwd") && wordCount == 1) {
         writeText(1, gCwd); writeText(1, "\n");
-    } else if (textEquals(command, "ls") || textEquals(command, "cd")) {
+    } else if (textEquals(command, "ls")) {
+        runLs(wordCount);
+    } else if (textEquals(command, "cd")) {
         runDirectoryCommand(command, wordCount);
-    } else if (textEquals(command, "cat") && wordCount == 2
-        && textEquals(gCommandWords + kMaxWordBytes, "/system/welcome.txt")) {
-        runCat(gCommandWords + kMaxWordBytes);
+    } else if (textEquals(command, "cat")) {
+        const char* path = gCommandWords + kMaxWordBytes;
+        if (wordCount != 2 || path[0] == '-') writeText(2, "usage: cat <file>\n");
+        else runCat(path);
     } else if (textEquals(command, "clear") && wordCount == 1) {
         writeText(1, "\033[2J\033[H");
     } else if (textEquals(command, "exit") && wordCount == 1) {
@@ -357,13 +445,17 @@ static void processLine(void)
         if (!gInputEOF) writeText(1, kPromptText);
         return;
     }
-    if (wordCount > 0) executeCommand(wordCount);
-    if (!gExitRequested && !gInputEOF && gCatHandle < 0 && gDirectoryHandle < 0) writeText(1, kPromptText);
+    gExpansionActive = 1; gExpansionWalking = 0;
+    gExpansionInputCount = wordCount; gExpansionIndex = 0; gExpansionCount = 0;
 }
 
 
 static void finish(void)
 {
+    if (gGlob) {
+        maia_glob_walk_cancel(&gGlob->walker);
+        free(gGlob->storage.compiler_workspace); free(gGlob); gGlob = 0;
+    }
     if (gCatHandle >= 0) { maia_vfs_close(gCatHandle); gCatHandle = -1; }
     if (gDirectoryHandle >= 0) { maia_vfs_close(gDirectoryHandle); gDirectoryHandle = -1; }
     for (int32_t handle = 0; handle < 3; ++handle) maia_stream_close(handle);
@@ -380,6 +472,7 @@ static void completeLine(void)
 }
 extern "C" __attribute__((visibility("default"))) void maia_app_start(void)
 {
+    initGlob();
     writeText(1, "MaiaOS Shell MVP. Type help to begin.\n");
     writeText(1, kPromptText); flushOutput();
 }
@@ -391,8 +484,10 @@ extern "C" __attribute__((visibility("default"))) void maiaos_step(void)
         if (gFatal) { finish(); return; }
         if (gPendingLength) return;
         if (gExitRequested) { finish(); return; }
+        if (gExpansionActive) { resumeExpansion(); continue; }
         if (gCatHandle >= 0) { resumeCat(); continue; }
         if (gDirectoryHandle >= 0) { resumeListing(); continue; }
+        if (gLsActive) { resumeLs(); continue; }
         if (gInputEOF) { gExitRequested = 1; continue; }
         if (gInputOffset == gInputCount) {
             const int32_t count = maia_stream_read(0,

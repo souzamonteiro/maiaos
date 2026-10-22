@@ -2,6 +2,219 @@
 
 ## Current objective/result
 
+### Current publication — full MaiaOS shell integration authorized
+
+The owner explicitly accepted commit and push of the complete MaiaOS set after
+reviewing its Git status. This approval supersedes the earlier exclusion of
+MaiaOS publication described in the historical checkpoints below.
+
+This commit records MaiaGlob as a published submodule, the published MaiaCpp pin,
+quote-preserving guest filename expansion, multi-file/directory ls, read-only
+absolute/relative/UTF-8 cat, the built shell.wasm, build/test scripts and docs.
+Generated shell and pattern frontends remain MaiaCC-owned. Existing VFS/stream
+imports and I/O/LVGL responsibilities are preserved; no ABI/version/npm change.
+
+Relevant validation is already complete and unchanged by this publication:
+strict C89 shell build; 38 unit tests; shell grammar/parser; 5356 exact JS/native/
+WASM frontend comparisons; shell-glob/files/directories/streams/boot/host/LVGL
+and kernel/Calculator/Clock tests. The last post-sync real LVGL run passed with
+2022 flushes, 74011 kernel steps and stable shell18/I/O2 memory pages. All 34
+recursive gitlinks are published and initialized; owner repositories are clean.
+Shell WASM SHA256 remains
+616381ca8730b8a42afa7ef28888c4b7697324403b20972139d7cce7e1004732.
+No source/build changes or duplicate full-suite run are needed solely to commit
+this validated snapshot. Parent before publication: main/origin 10f1a34.
+
+Next safe action after publication is optional interactive simulator QA or the
+next separately scoped shell feature. Browser interaction was not rerun; full
+POSIX execution, pipelines, redirection, ls options and multi-file cat remain
+outside this slice. No outstanding publication approval remains for this set.
+
+
+### Earlier checkpoint — owner-approved example publication (2026-10-21)
+
+The owner explicitly requests committing generated examples for GitHub review,
+including from a mobile device. This supersedes the earlier decision to leave
+those artifacts dirty; it does not authorize publishing the pending MaiaOS
+shell/cat feature. Both compiler READMEs now record the scoped preference for
+tracked example outputs, not arbitrary ignored caches/build scratch files.
+
+Published main commits: MaiaC 5c282fe (115 artifacts + README), MaiaCpp 426947f
+(published C pin), MaiaJS 18a0115 (106 artifacts, README, validation report and
+C/Cpp pins), MaiaGlob f14d86b (published Cpp pin and status note). All four owner
+repositories are clean; no compiler implementation, grammar, API, version or npm
+package changed. Code-fix milestones in the next section remain valid.
+
+Artifact verification: 77 actual WASM modules validate; all 58 modified WAT files
+assemble through each owner's MaiaWASM to byte-identical paired WASM; 82 JSON
+manifests parse. Existing distribution execution passes: MaiaC 17/17 examples
+(one non-test directory skipped), MaiaJS 11/11 C++ + 11/11 JS ports. After pointer
+sync: MaiaCpp npm test PASS; MaiaJS npm test 379/379 and test:suite:run PASS;
+MaiaGlob test-wasm (10638 cases/18 walker scenarios/500 repetitions) and
+check-generated PASS. Full source builds were already validated; unchanged
+compiler implementations do not need timestamp-only regeneration for this
+artifact-only commit.
+
+Extra strict Clang syntax checking fails on four legacy emitted C examples,
+and also on each corresponding previously published file: functions.c returns
+a void expression and omits printf declarations; classes.c, inheritance.c and
+casts.c omit printf declarations. Their actual Maia Suite distributions pass,
+but these examples are not strict-C89 conformance evidence. No generated output
+was hand-edited. See maiajs/docs/EXAMPLE_ARTIFACT_VALIDATION.md; a future owner
+compiler fix must add regressions and regenerate source normally.
+
+MaiaOS local pointers now record MaiaCpp 426947f and MaiaGlob f14d86b.
+`npm run test:shell-glob` and `npm run test:shell-lvgl` PASS after synchronization:
+2022 actual LVGL flushes, 74011 kernel steps, shell18/I/O2 pages stable, drained
+streams and closed handles. No rebuild is needed for unchanged compiler and
+guest sources. Main/origin remains 10f1a34; pending shell/cat sources, tests and
+docs are preserved locally. No MaiaOS commit/push, npm release or version change
+in this publication.
+
+
+### MaiaGlob integration — verified implementation milestone (2026-10-21)
+
+Objective: reusable generated-pattern MaiaGlob library and quote-preserving
+filename expansion before shell dispatch, with multiple file/directory ls
+operands. This is the owner's approved DESIGN.md, not a replacement architecture.
+
+Implementation commits validated before the artifact-only publication below:
+- MaiaC e173259: indexed aggregate copies (earlier f7f76bd), member-array/pointer
+  strides (196f8ba), sizeof dereferenced structs (e173259). Focused regressions,
+  full bundle + 13 extras PASS; large compiler example validates at 23436 bytes.
+- MaiaCpp f800a2f: published MaiaC pin; npm test plus struct regressions PASS.
+- MaiaJS 06905a4: published C/Cpp pins; npm run test:full PASS, All steps OK.
+- MaiaGlob c9bcef0: stronger walker harness and published MaiaCpp pin. make verify
+  and check-generated PASS: 10638 native/WASM matching/program cases, 10621
+  frontend semantic cases, strict C89/C++98 ASan/UBSan, 18 actually executed guest
+  walker cases, failing negative control, API bounds and cancellation checks.
+  500 repetitions restore stack and retain 18 memory pages; workspace 94912
+  bytes, ignored test WASM 1149947 bytes. Five generated artifacts reproduce
+  exactly; 16 recursive dependency pins match.
+
+The first guest walker coverage claim was incomplete: MaiaC preprocessing left
+WALK_CASE invocations unexpanded after a later undef. Native scenarios did run;
+matching/program parity, API checks and explicit cancellation loops were valid
+but did not prove those guest traversal scenarios. Tests now call each scenario
+explicitly, assert count=18, check a negative control, and report last status and
+paths. No expected result was weakened. This exposed the sizeof bug: old memset
+cleared only four bytes, so dot traversal failed after root traversal. The final
+published compiler pins above pass reused traversal. General macro preprocessing
+and MaiaCC character-class emission findings remain in MaiaGlob's owner notes.
+
+MaiaOS local implementation uses only its published maiaglob/maiacpp submodules:
+raw input -> generated shell lexer/parser -> decoded words plus protected-byte
+masks -> generated MaiaGlob compiler and resumable walker -> final argv -> command
+dispatch. No host matching, handwritten parser, ABI or capability additions.
+VFS callbacks use existing opendir/readdir/close. I/O owns real LVGL/events;
+shell stdout/stderr use bounded streams; kernel remains independently scheduled.
+Both generated frontends share one normal C++98 unity translation unit, with
+identifier-only prefix macros scoped between them. No generated output is edited.
+
+Local shell files: apps/shell/shell.cpp, shell-glob.hpp, shell.wasm,
+scripts/build-shell-wasm.mjs, test-shell-glob.mjs, test-shell-host.mjs, package.json,
+README files, planning/SHELL_GLOB_INTEGRATION.md and gitlinks/.gitmodules. Existing
+cat implementation/test/docs below remain preserved. Both features are local;
+MaiaOS main/origin stays 10f1a34. No MaiaOS/cat publication, npm or version change
+is authorized. Owner-library publication and tested compiler propagation are
+explicitly authorized; no additional permission is needed for their validation.
+
+Current result: published f800a2f/c9bcef0 synchronized and staged; strict C89
+shell build and actual shell glob suite PASS. Functional regressions PASS:
+38 unit tests, streams, shell host, 128KiB cat/1000 reads, 1024-entry directories/
+1000 ls-cd cycles, 25 real LVGL boot sessions and kernel/Calculator/Clock tests.
+Actual LVGL shell run: 2070 flushes, 74011 kernel steps, shell18/I/O2 pages stable.
+New glob tests include single quotes, dot/parent components, absolute-to-relative
+reuse, handle-limit errors and explicit parent-snapshot paths during the 512-entry
+cooperative peer-close case. All handles/endpoints close.
+Final grammar/parser/equivalence verification PASS: 52 raw frontend cases and
+5356 JS/native C++98/WASM inputs with exact tokens/UTF-16 offsets/trees, 2400
+accepted, 2136 syntax errors, 820 lexical errors, restored stack, no divergences.
+Recursive remote audit passed all 34 MaiaOS pins and all owner/consumer pins
+across seven GitHub repositories. See the consumer plan for commands, binary
+hash and detailed evidence. No MaiaOS publication. Final import comparison: all 13 imports unchanged from
+published HEAD; all 34 dependency checkouts clean. Owner MaiaC/MaiaJS retain
+115/106 example artifacts were then preserved, unstaged. The owner's subsequent
+artifact-publication request below supersedes that temporary dirty state.
+This local slice is complete;
+no active tests remain. Next safe action is owner review/optional interactive
+simulator QA, then separately authorized MaiaOS publication. Keep full POSIX,
+other expansion stages, pipelines and redirection explicitly out of scope.
+
+Automatic approval review rejected broad restoration of test-produced example
+artifacts because it could discard unrelated edits. It was not executed or
+bypassed. At that point, MaiaC/MaiaJS examples stayed outside the compiler-fix
+commits. The subsequent explicit artifact publication below commits that
+preserved output instead of deleting it. A separate MaiaJS push rejection (tests thought still running) was
+resolved by reading final successful log/exit status before publication.
+
+The original glob-1.0 is preserved; no legacy GPL/public-domain matcher source was
+copied into the new Apache 2.0 implementation. No agents were used. Browser
+interaction has not been rerun for this integration; real LVGL WASM regression
+is required separately and does not itself constitute interactive browser QA.
+
+
+### Read-only cat path generalization — 2026-10-21
+
+Owner requested continued implementation after published main/origin `10f1a34`.
+Implemented the next documented bounded consumer slice: `cat <file>` now reads
+VFS-authorized absolute/cwd-relative paths using the existing guest normalizer,
+without public ABI/capability/status or filesystem semantics changes. No new
+publication authorization was given; feature files remain local/uncommitted.
+The previous directory slice is already published and must not be treated dirty.
+
+Before editing, wrote `docs/planning/SHELL_CAT_READ_ONLY.md` with exact behavior
+and acceptance. Cat accepts one path (including quoted Unicode/space paths),
+rejects stdin/options/multiple operands with usage, uses existing VFS READ only,
+reports permission/quota/path errors and preserves generic open/read failures.
+It copies file bytes unchanged, without adding newline, through the existing
+bounded 128-byte reader/pending-output state machine. Existing path/input/word
+limits apply; failed cat does not change cwd. VFS remains authorization authority.
+No directory probe/stat API, host terminal/parser or JavaScript command logic
+was added. I/O remains C++98 maia.gfx -> actual LVGL. Kernel keeps stepping.
+
+Changed: shell.cpp and reproducible shell.wasm; package test script; new
+`scripts/test-shell-files.mjs`; expanded actual LVGL host and boot tests; README,
+shell README, ABI consumer documentation, new slice contract and this handoff.
+No VFS/host adapter, manifest, compiler, grammar, generated source, dependency pin,
+version or npm change. Exact old/new WASM imports were compared and are equal;
+EBNF/generated parser/Regex headers + shell manifest are byte-identical to HEAD.
+All seven principal dependency repositories remain clean. MaiaOS HEAD `10f1a34`.
+
+Verification PASS:
+- `npm run build:shell -- --check-c89`: 1193374-byte WASM built by pinned MaiaCpp
+  AST-strict -> C89 -> MaiaC/MaiaWASM; Clang checks syntax only.
+- `npm test`: 38 tests. `npm run test:shell-files`: exact 128KiB binary stdout
+  through 31-byte output ring, 1000 reads, quoted Unicode paths, private-home
+  isolation, empty/unterminated content, usage/errors/quotas, exact path bounds,
+  paused and closed peers, partial-output read error, final unterminated cat on
+  stdin EOF, stable guest stack/memory and complete file/stream cleanup.
+- `npm run test:shell-lvgl`: actual kernel/I/O/shell, prior command/directory/
+  editing/error/bounds regressions plus cat absolute/relative/quoted paths,
+  permissions, empty/unterminated content and large UTF-8 output. Shell 18 pages,
+  I/O 2 pages, 73612 kernel steps, 1000 repeat parses, all handles/streams closed.
+- `npm run test:shell-boot`: 25 launch/exits, failed startup, quotas, unchanged
+  URL, directory and file import traps with live handles; production cleanup
+  releases all handles/windows/endpoints. Actual WASM/LVGL Node reference harness.
+- `npm run test:shell-directories`, `npm run test:io-streams`,
+  `npm run test:lvgl-host`: previous directory/stream/kernel/Calculator/Clock PASS.
+- JS syntax and `git diff --check` PASS. Full 5356-case parity corpus not rerun:
+  lexer/parser/grammar are unchanged; previous published baseline remains valid.
+Logs: `/tmp/maia-cat-build.log`, `/tmp/maia-cat-test*.log`, `/tmp/maia-cat-files.log`,
+`/tmp/maia-cat-host.log`. Live browser interaction, device callbacks and MaiaWASMVM
+checks remain UNRUN; do not claim those from Node/LVGL reference tests.
+
+Known limits: one operand, no stdin/options/multi-file cat or write/redirection;
+generic file-open API cannot distinguish missing files from directory targets.
+Raw streams preserve binary bytes, while I/O intentionally interprets/sanitizes
+UTF-8/terminal controls according to its existing profile (not a binary viewer).
+No new GUI or shell parsing rules were implemented. No commit/push/npm performed.
+Next: owner can refresh simulator, run `cd /system`, `cat welcome.txt`, `pwd`,
+then review local feature publication. Later writable files/redirection or new
+process/VM APIs require their own concrete behavior/contracts before extension.
+Historical sections below describe older published states, superseded here.
+
+
 ### Approved directory navigation slice implemented — 2026-10-20
 
 Owner explicitly approved `docs/planning/SHELL_VFS_DIRECTORIES.md`: opendir and

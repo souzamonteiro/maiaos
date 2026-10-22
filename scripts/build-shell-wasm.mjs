@@ -10,6 +10,8 @@ const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cpp = path.join(root, "maiacpp");
 const shell = path.join(root, "apps/shell");
+const glob = path.join(root, "maiaglob");
+assert.ok(fs.existsSync(path.join(glob, "maia_glob_compile.cpp")), "Initialize the published MaiaGlob submodule");
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "maia-shell-build-"));
 const keep = process.env.MAIA_SHELL_KEEP_BUILD === "1";
 const { Cpp98Compiler } = require(path.join(cpp, "compiler/cpp-compiler.js"));
@@ -22,8 +24,18 @@ try {
     path.join(shell, "maia-shell.ebnf"), path.join(generated, "maia-shell-parser.hpp")],
   { cwd: root, stdio: "inherit" });
   fs.copyFileSync(path.join(cpp, "maiaregex/maia_regex.h"), path.join(generated, "maia_regex.h"));
+  // One C++ translation unit shares public POD helpers. Generated identifiers
+  // are scoped by the owner's prefix include, then restored before shell input.
+  const unity = path.join(temporary, "shell-unity.cpp");
+  const prefix = fs.readFileSync(path.join(glob, "generated/glob-prefix.hpp"), "utf8");
+  const rawGlob = fs.readFileSync(path.join(glob, "generated/glob-parser.hpp"), "utf8");
+  const undefNames = [...new Set([...prefix.matchAll(/^#define\s+(\w+)/gm),
+    ...rawGlob.matchAll(/^#define\s+(MAIACC_\w+)/gm)].map(match => match[1]))];
+  fs.writeFileSync(unity, `#include "${path.join(glob, "maia_glob_compile.cpp")}"\n`
+    + undefNames.map(name => `#undef ${name}\n`).join("")
+    + `#include "${path.join(shell, "shell.cpp")}"\n`);
   const emitted = path.join(temporary, "shell.c");
-  const code = new Cpp98Compiler(path.join(shell, "shell.cpp"), {
+  const code = new Cpp98Compiler(unity, {
     astStrict: true, legacyFunctionHints: false,
   }).compile();
   assert.doesNotMatch(code, /stub-fallback|deterministic-fold/, "Shell bodies must be implemented");
@@ -37,6 +49,7 @@ try {
 #include "${path.join(cpp, "maiac/src/stdlib.c")}"
 #include "${path.join(cpp, "maiac/src/string.c")}"
 #include "${path.join(cpp, "maiaregex/maia_regex.c")}"
+#include "${path.join(glob, "maia_glob.c")}"
 #include "${emitted}"
 `);
   const compiled = compileSource(fs.readFileSync(linked, "utf8"), {

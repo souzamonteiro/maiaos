@@ -21,6 +21,15 @@ flowchart TB
 
 **MaiaOS guest and applications**: the implemented kernel guest is written in C++98 and compiled to `/system/kernel.wasm`; Calculator and Clock are C++98 WASM example apps with manifests. C++98 guests use MaiaCpp AST-strict -> C89 -> MaiaC -> WASM, with MaiaCC and MaiaWASM from the recursive in-repository toolchain submodules. `shell.wasm` implements the bounded eight-command MVP with generated lexing/parsing; the real C++98 `io.wasm` owns its LVGL terminal and keyboard editing. Bounded copied-byte streams connect their isolated memories while the kernel keeps stepping. `desktop.wasm` remains planned. The native platform boot host that loads the kernel through MaiaWASMVM remains planned; browser startup currently uses `platform/desktop-web/main.js` and the native browser WebAssembly reference engine.
 
+The shell's filename-expansion stage uses the published in-repository MaiaGlob
+library: a MaiaCC-generated C++98 pattern frontend and bounded C89 matcher/walker.
+It preserves quoting from the generated shell tree, expands before dispatch,
+and accesses only the existing authorized VFS directory imports. The host
+transports directory packets and stream bytes; pattern matching and enumeration
+remain in the guest. `ls` accepts multiple file/directory operands; `cat` remains
+single-file and read-only. These additions do not change the public host ABI,
+capabilities, stream contract or rendering responsibilities.
+
 ## Execution options
 
 - **Development**: browser or Node native WebAssembly engine as a temporary reference backend, with LVGL as the UI renderer. Browser JavaScript only presents LVGL's flushed image buffers; it does not draw widgets. This is not evidence of MaiaVM correctness.

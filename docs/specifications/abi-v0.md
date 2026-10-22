@@ -241,11 +241,30 @@ across steps/backpressure and closes the snapshot at EOF/error/exit. Guest code
 validates entry packet headers, type, lengths and forbidden name bytes before
 printing. I/O still owns the real LVGL terminal; the kernel remains scheduled.
 
-No options, symlinks, HOME/OLDPWD expansion, mutable directory APIs, general cat,
+No options, symlinks, HOME/OLDPWD expansion, mutable directory APIs,
 spawn, pipelines or full POSIX behavior are added. Browser URL and host cwd remain
 unchanged. See [the approved contract](../planning/SHELL_VFS_DIRECTORIES.md).
 Checks: `npm test`, `npm run test:shell-directories`, `npm run test:shell-lvgl`,
 `npm run test:shell-boot`, `npm run test:io-streams`, `npm run test:lvgl-host`.
+
+## Read-only cat consumer extension (2026-10-21)
+
+No ABI/import/capability change. The shell now normalizes one file operand using
+its own cwd and the existing 1023-byte path limit, then calls existing
+`maia.vfs.open/read/close` with READ only. Output preserves file bytes and adds no
+newline. Missing/excess operands and options produce a usage diagnostic; stdin,
+multiple files and write/redirection behavior remain outside this slice. The
+current file-open errors remain authoritative, including generic missing/file-
+versus-directory failure. No stat or directory probe is added to emulate a
+missing file API distinction. Permission/quota/path/read errors go to stderr.
+
+The existing state machine yields under bounded stream backpressure and closes
+files at EOF/error/exit; host teardown closes them after a trap. I/O renders the
+same copied bytes through the existing terminal/LVGL profile. Raw 128KiB binary
+transfer, 31-byte rings, cwd/private-home authorization, read errors after partial
+output, EOF/closed-peer cleanup and 1000 reads are covered by
+`npm run test:shell-files`; full kernel/I/O/shell rendering is covered by
+`npm run test:shell-lvgl`. See [the behavior/test contract](../planning/SHELL_CAT_READ_ONLY.md).
 
 ## Evolution
 

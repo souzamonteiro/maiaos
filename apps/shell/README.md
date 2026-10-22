@@ -1,6 +1,6 @@
 # MaiaOS Shell — implementation blueprint
 
-**Status:** bounded MVP with MaiaCC-generated C++98 lexing/parsing integrated in the WASM guest. The app guest supports `help`, `echo`, `pwd`, `cat /system/welcome.txt`, `clear`, and `exit`; it is not POSIX-conformant. The reference for comparison is POSIX.1-2017, Shell Grammar, sections 2.10.1 and 2.10.2.
+**Status:** bounded MVP with MaiaCC-generated C++98 lexing/parsing integrated in the WASM guest. The app guest supports `help`, `echo`, `pwd`, `ls`, `cd`, `cat <file>`, `clear`, and `exit`; it is not POSIX-conformant. The reference for comparison is POSIX.1-2017, Shell Grammar, sections 2.10.1 and 2.10.2.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ The shell grammar source is `apps/shell/maia-shell.ebnf`. Parser generation is o
 4. Treat the generated JavaScript parser as a grammar-test oracle; the runtime guest calls the generated `maiaCCLexerTokenize` and `maiaCC_parse` on raw input. The collector contains no replacement lexical rules.
 5. Compile the runtime guest through MaiaCpp AST-strict -> C89 -> MaiaC -> WASM; do not use Emscripten for `shell.wasm`.
 
-**Important:** the grammar is only a structural subset. It covers basic simple commands, assignments, file redirections, pipelines, AND/OR lists, subshells, brace groups, `if`, `while`, `until`, and `for`. It does not yet cover `case`, function definitions, here-document bodies, or POSIX word expansion. Its quoted-word lexer is deliberately limited. It also treats reserved words globally and recognizes digit-only tokens as `IO_NUMBER` without checking that they are adjacent to `<` or `>`; POSIX 2.10 requires parser-context classification for reserved words, `NAME`, `ASSIGNMENT_WORD`, and `IO_NUMBER`. These cases require a stateful/context-aware scanner or parser integration, not a change to the grammar productions alone. No POSIX-conformance claim should be made until those rules are implemented and differentially tested.
+**Important:** the grammar is only a structural subset. It covers basic simple commands, assignments, file redirections, pipelines, AND/OR lists, subshells, brace groups, `if`, `while`, `until`, and `for`. It does not yet cover `case`, function definitions, here-document bodies, or the full POSIX word-expansion sequence (bounded filename expansion is implemented separately below). Its quoted-word lexer is deliberately limited. It also treats reserved words globally and recognizes digit-only tokens as `IO_NUMBER` without checking that they are adjacent to `<` or `>`; POSIX 2.10 requires parser-context classification for reserved words, `NAME`, `ASSIGNMENT_WORD`, and `IO_NUMBER`. These cases require a stateful/context-aware scanner or parser integration, not a change to the grammar productions alone. No POSIX-conformance claim should be made until those rules are implemented and differentially tested.
 
 The current grammar is exercised through `ParseTreeCollector` fixtures. Valid fixtures cover simple commands, assignments, redirections, pipelines, AND/OR lists, comments, quoting, compound groups and loops. Invalid fixtures cover repeated separators and adjacent pipeline operators. This verifies generation and the declared subset only; it does not replace the POSIX lexical-convention rules.
 
@@ -61,9 +61,16 @@ function; no browser main-thread blocking or JavaScript terminal is involved.
 Only I/O requests `tty.input`; the host routes keys while the LVGL canvas has
 focus. Prompt, edited input and caret share a single live-line LVGL label.
 
-The command set is `help`, `echo`, `pwd`, `ls [path]`, `cd [path]`,
-`cat /system/welcome.txt`, `clear`, `exit`. `clear` emits the supported terminal clear/home escape sequence.
+The command set is `help`, `echo`, `pwd`, `ls [path ...]`, `cd [path]`,
+`cat <file>`, `clear`, `exit`. `clear` emits the supported terminal clear/home escape sequence.
 The additive `maia.vfs.opendir/readdir` imports supply bounded directory snapshots.
+MaiaGlob performs bounded `*`, `?` and bracket-class expansion in the guest,
+preserving quoted/escaped bytes. Each source word's matches are sorted by UTF-8
+bytes; unmatched words remain literal. Expansion completes before command
+dispatch, with errors instead of partial execution when a limit is reached.
+`ls` accepts multiple file/directory operands and continues after an operand
+error; directory headings appear with multiple operands. Options remain unsupported.
+`cat` still accepts exactly one operand after expansion.
 The shell owns its cwd; no host-global chdir is performed. Mutable directory
 operations, general spawning and descriptor transfer remain future work.
 The shell retains `maia_app_start`/`maiaos_step`; I/O uses
@@ -77,11 +84,12 @@ MaiaC/MaiaWASM; Emscripten builds only the separate platform LVGL module.
 | MaiaCC grammar | Structural subset; generated C++98 lexer/parser embedded in the runtime guest and checked against the JS oracle. |
 | Browser app catalog and LVGL | Implemented; I/O draws its window, output, editable line and caret using shell prompt bytes. |
 | Keyboard event syscalls | Implemented; printable keys, Enter, arrows, Home/End, Backspace, Delete, and one-line Up/Down history are handled by the C++98 I/O guest. |
-| Minimal command executor | Implemented and tested: `help`, `echo`, `pwd`, `ls`, `cd`, `cat /system/welcome.txt`, `clear`, `exit`. |
-| Browser host smoke | Existing MVP had interactive verification. This integration is tested through Node and the real LVGL-WASM callbacks; browser interaction was not rerun because the integrated browser is unavailable. |
-| Directory navigation | Implemented: bounded `ls [path]`, `cd [path]`, real per-instance `pwd`; own-home isolation and escaped control bytes. |
+| Minimal command executor | Implemented and tested: `help`, `echo`, `pwd`, `ls`, `cd`, `cat <file>`, `clear`, `exit`. |
+| Browser host smoke | Existing MVP had interactive verification. This integration is tested through Node and the real LVGL-WASM callbacks; interactive browser verification was not rerun for this change. |
+| Directory navigation | Implemented: bounded `ls [path ...]`, `cd [path]`, real per-instance `pwd`; own-home isolation and escaped control bytes. |
 | Mutable filesystem commands | Not implemented; mkdir/unlink and write/redirection semantics need their own contracts/tests. |
-| Pipelines, redirection, expansions, jobs, and POSIX conformance | Future work; not required for this MVP. |
+| Filename expansion | MaiaGlob guest compiler/walker, quote masks, per-word byte sorting and atomic argv limits; see the consumer plan and its current validation status. |
+| Pipelines, redirection, other expansions, jobs, and POSIX conformance | Future work; not required for this MVP. |
 
 The current reference vertical slice is **kernel + I/O service + shell app + real LVGL callbacks**, with bounded copied-byte streams. Device firmware/MaiaWASMVM integration is still pending.
 
@@ -97,6 +105,8 @@ npm run test:shell-lvgl
 npm run test:io-streams
 npm run test:shell-boot
 npm run test:shell-directories
+npm run test:shell-files
+npm run test:shell-glob
 npm test
 ```
 
@@ -230,7 +240,7 @@ This broad POSIX-like proposal is **not** the ABI to implement for the MVP. It o
 ## Virtual filesystem limits
 
 The shell reads `/system/welcome.txt` through existing file imports. Directory
-imports now support `ls [path]` and `cd [path]` using the same private VFS view.
+imports now support `ls [path ...]` and `cd [path]` using the same private VFS view.
 Cwd starts at `/`; `cd` without an operand selects the shell's own home. Relative
 paths, repeated slashes, `.` and `..` are normalized lexically; above-root `..`
 stays at root. Failed cd leaves cwd unchanged. Paths are bounded at 1023 normalized
@@ -243,11 +253,36 @@ escaped. Each snapshot is bounded at 1024 entries / 64KiB; entry names at 255 UT
 bytes. The shell yields/resumes under output backpressure, preserving all entries,
 and closes the directory on EOF/error/exit. Missing, denied and non-directory
 paths have distinct errors. Arbitrary empty directories/mkdir/unlink, file
-mutation, broader cat and redirection are not implemented. See the
+mutation and redirection are not implemented. See the
 [approved contract](../../docs/planning/SHELL_VFS_DIRECTORIES.md) for packet/limits
 and snapshot semantics. `npm run test:shell-directories` checks actual WASM,
 1024-entry output through a 31-byte ring, independent cwd instances, repeated
 navigation, exact path bounds, capability denial and malformed-packet cleanup.
+
+## Read-only cat
+
+`cat <file>` now accepts one VFS-authorized absolute or cwd-relative path, including
+quotes, spaces and UTF-8 names. It uses the same logical path normalization as
+cd/ls, without changing cwd. No new host API, capability or status code is added.
+File open uses READ only, and file bytes are copied unchanged through existing
+bounded stdout streams. Empty files print nothing; unterminated text is followed
+directly by the next prompt, without an invented newline. I/O remains responsible
+for terminal rendering, including its current UTF-8/control interpretation; raw
+binary transfer correctness is checked at the stream boundary.
+
+Missing/excess operands and options produce `usage: cat <file>`. An empty path
+produces `cat: invalid path`. stdin, multiple operands and options are not part of
+this slice; a dash-prefixed file can be read as `./-name`. Private-home denials and
+open quotas have explicit diagnostics. Missing files/directory targets retain
+the VFS file-open API's generic open failure; no extra stat/directory probe is
+introduced. Errors use stderr, and files close on EOF/error/exit/trap.
+
+`npm run test:shell-files` exercises the actual shell WASM with 128KiB binary
+output over a 31-byte ring, own/foreign home files, quoted Unicode names, empty/
+unterminated content, read errors after partial output, pause/resume, closed peer,
+stdin EOF, exact path bounds and 1000 repeated reads with stable stack/memory.
+See [the slice contract](../../docs/planning/SHELL_CAT_READ_ONLY.md). Browser
+interaction and native-device/MaiaWASMVM conformance remain separate checks.
 
 ## Future command inventory
 
@@ -270,7 +305,7 @@ The grammar test validates parsing only. The implemented MVP commands are listed
 
 ## Next acceptance criteria
 
-Review directory navigation interactively in the simulator. The next bounded addition can generalize read-only `cat` to VFS-authorized relative/absolute paths using the same cwd; specify behavior and tests first. Keep stderr, cleanup and nonblocking I/O regressions; process spawning and writable redirection need separate contracts.
+Review directory navigation interactively in the simulator. Read-only `cat` now supports VFS-authorized relative/absolute paths using the same cwd; review file output interactively. Keep stderr, cleanup and nonblocking I/O regressions; process spawning and writable redirection need separate contracts.
 
 ## References
 
@@ -279,3 +314,19 @@ Review directory navigation interactively in the simulator. The next bounded add
 - REx: https://github.com/GuntherRademacher/rex-parser-generator
 - POSIX Shell Command Language: https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html
 - BusyBox: https://busybox.net/
+
+## MaiaGlob consumer validation
+
+The published `maiaglob` submodule provides the portable C89 matcher/walker and
+MaiaCC-generated C++98 pattern compiler. Both shell and pattern frontends compile
+through MaiaCpp -> C89 -> MaiaC/MaiaWASM. Pattern execution stays in the guest;
+VFS adapters use only existing opendir/readdir/close imports. No ABI or capability
+addition is introduced by filename expansion.
+
+Run `npm run test:shell-glob` for actual guest quoting, Unicode, component paths,
+multiple ls operands, limits, privacy, cooperative traversal and cleanup. See
+[consumer plan](../../docs/planning/SHELL_GLOB_INTEGRATION.md) and
+[handoff](../../docs/AGENT_HANDOFF.md) for current results and compiler corrections.
+Shell limits remain 255 input bytes, 32 tokens, 12 argv slots and 95 bytes per
+decoded word. No brace/extglob/globstar, variable expansion, command substitution,
+locale collation or POSIX-completeness claim is made.

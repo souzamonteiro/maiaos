@@ -88,9 +88,25 @@ for (let session = 0; session < 25; ++session) {
   }
   empty();
 }
+// A real cat read trap must release its file and the terminal session.
+{
+  const process = await context.startApplication(options);
+  const io = [...runningProcesses].find(item => item.role === "service");
+  process.vfs.files.set("/shared/read-trap.txt", new TextEncoder().encode("fixture"));
+  process.vfs.read = () => { throw new Error("Injected file transport trap"); };
+  broker.write(io.pid, 3, new TextEncoder().encode("cat /shared/read-trap.txt\n"));
+  assert.throws(() => process.runtime.exports.maiaos_step(), /file transport trap/);
+  assert.equal(process.vfs.openHandleCount, 1);
+  context.stopProcess(process, 1); assert.equal(process.vfs.openHandleCount, 0);
+  for (let tick = 0; tick < 12; ++tick) {
+    lvgl._maiaos_lvgl_tick();
+    for (const item of [...runningProcesses]) item.runtime.exports[item.stepExport]();
+  }
+  empty();
+}
 assert.equal((await context.createAppVfs("limit.test", 100)).maxOpenFiles, 16);
 await assert.rejects(context.createAppVfs("limit.test", -1), /Invalid open-file limit/);
 await assert.rejects(context.createAppVfs("limit.test", 1.5), /Invalid open-file limit/);
 assert.equal(context.window.location.href, "http://localhost:8080/");
 assert.ok(flushes > 0);
-console.log(`Actual boot functions passed: failed I/O/shell startup cleanup, keyboard ownership, 25 real LVGL session launches/exits, directory-trap cleanup, manifest quotas, unchanged URL, zero surviving windows/endpoints (${flushes} flushes).`);
+console.log(`Actual boot functions passed: failed I/O/shell startup cleanup, keyboard ownership, 25 real LVGL session launches/exits, directory/file-trap cleanup, manifest quotas, unchanged URL, zero surviving windows/endpoints (${flushes} flushes).`);

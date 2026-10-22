@@ -44,7 +44,11 @@ const labels = new Map();
 let nextLabel = 1;
 let exitCode = null;
 const vfs = new MemoryVfsAdapter({ appId: manifest.id, maxOpenFiles: manifest.limits.openFiles, files: {
-  "/shared/folder with space/child/note.txt": "fixture",
+  "/shared/folder with space/child/note.txt": "fixture\n",
+  "/shared/empty.txt": "", "/shared/no-newline.txt": "tail",
+  "/home/org.maiaplatform.shell/note.txt": "own home\n",
+  "/home/another/private.txt": "MUST NOT LEAK",
+  "/shared/large.txt": "Maia streaming UTF-8: olá 🌎\n".repeat(1500),
   "/shared/names/é": "unicode", "/shared/names/\x1b[2J": "control",
   "/shared/names/a\nb": "newline", "/shared/names/back\\slash": "backslash",
 } });
@@ -160,7 +164,7 @@ submitText("cat /system/welcome.txt");
 const longEcho = `${"A".repeat(70)} ${"B".repeat(70)}`;
 submitText(`echo ${longEcho}`);
 const priorOutput = labels.get(outputHandle);
-assert.match(priorOutput, /Commands: help, echo, pwd, ls \[path\], cd \[path\], cat \/system\/welcome\.txt, clear, exit/);
+assert.match(priorOutput, /Commands: help, echo, pwd, ls \[path \.\.\.\], cd \[path\], cat <file>, clear, exit/);
 assert.match(priorOutput, /echo hello\nhello/);
 assert.match(priorOutput, /pwd\n\/\n/);
 assert.match(priorOutput, /C\+\+ kernel read this text through maia\.vfs/);
@@ -204,6 +208,9 @@ for (const [source, expected] of commandCases) {
 const directoryCases = [
   ["ls", "apps/\nhome/\nshared/\nsystem/\ntmp/\n"],
   ["ls /system", "welcome.txt\n"],
+  ["echo /system/*.txt", "/system/welcome.txt\n"],
+  ["ls /system/*.txt", "/system/welcome.txt\n"],
+  ["ls /system/welcome.txt /system", "/system/welcome.txt\n/system:\nwelcome.txt\n"],
   ["cd /system", ""], ["pwd", "/system\n"], ["ls .", "welcome.txt\n"],
   ["cd /system/welcome.txt", "cd: not a directory\n"], ["pwd", "/system\n"],
   ["cd missing", "cd: no such directory\n"], ["pwd", "/system\n"],
@@ -213,10 +220,10 @@ const directoryCases = [
   ["pwd", "/shared/folder with space\n"], ["ls", "child/\n"],
   ["cd child/../../names", ""], ["pwd", "/shared/names\n"],
   ["ls", "\\x1B[2J\na\\x0Ab\nback\\\\slash\né\n"],
-  ["cd", ""], ["pwd", "/home/org.maiaplatform.shell\n"], ["ls", ""],
+  ["cd", ""], ["pwd", "/home/org.maiaplatform.shell\n"], ["ls", "note.txt\n"],
   ["ls /home", "org.maiaplatform.shell/\n"],
-  ["ls -l", "usage: ls [path]\n"], ["cd -", "usage: cd [path]\n"],
-  ["ls a b", "usage: ls [path]\n"], ["cd a b", "usage: cd [path]\n"],
+  ["ls -l", "usage: ls [path ...]\n"], ["cd -", "usage: cd [path]\n"],
+  ["ls a b", "ls: no such directory\nls: no such directory\n"], ["cd a b", "usage: cd [path]\n"],
   ['cd ""', "cd: invalid path or directory entry\n"],
   ["cd /", ""],
 ];
@@ -227,6 +234,34 @@ for (const [source, expected] of directoryCases) {
   assert.equal(vfs.openHandleCount, 0, source);
   assert.equal(guest.exports.__stack_ptr.value, stackBefore, source);
 }
+const fileCases = [
+  ["cd /system", ""], ["cat welcome.txt", "C++ kernel read this text through maia.vfs.\n"],
+  ['cat "/shared/folder with space/child/note.txt"', "fixture\n"],
+  ["cd /shared/folder\\ with\\ space/child", ""], ["cat ./note.txt", "fixture\n"],
+  ["cat absent", "cat: cannot open file\n"], ["cat /shared/empty.txt", ""],
+  ["cat /home/another/private.txt", "cat: permission denied\n"],
+  ["cd", ""], ["cat note.txt", "own home\n"],
+  ["cat", "usage: cat <file>\n"], ["cat -n", "usage: cat <file>\n"],
+  ["cat one two", "usage: cat <file>\n"], ['cat ""', "cat: invalid path\n"],
+  ["cd /", ""],
+];
+for (const [source, expected] of fileCases) {
+  submitText("clear"); submitText(source);
+  assert.equal(labels.get(outputHandle), `maia> ${source}\n${expected}`, source);
+  assert.equal(labels.get(inputHandle), "maia> |", source);
+  assert.equal(vfs.openHandleCount, 0, source);
+  assert.equal(guest.exports.__stack_ptr.value, stackBefore, source);
+}
+submitText("clear"); submitText("cat /shared/no-newline.txt");
+assert.equal(labels.get(outputHandle), "maia> cat /shared/no-newline.txt\n");
+assert.equal(labels.get(inputHandle), "tailmaia> |", "cat must not add a newline to the file");
+submitText("clear");
+const stepsBeforeFile = kernelSteps;
+submitText("cat /shared/large.txt"); pump(512);
+assert.match(labels.get(outputHandle), /Maia streaming UTF-8: olá 🌎\n$/);
+assert.equal(labels.get(inputHandle), "maia> |");
+assert.equal(vfs.openHandleCount, 0); assert.ok(kernelSteps >= stepsBeforeFile + 512);
+assert.equal(guest.exports.__stack_ptr.value, stackBefore);
 submitText("clear");
 const stepsBeforeListing = kernelSteps;
 submitText("ls /shared/large"); pump(256);
@@ -261,4 +296,4 @@ assert.equal(io.exports.memory.buffer.byteLength / 65536, ioPages);
 assert.equal(kernel.exports.__stack_ptr.value, kernelStack);
 assert.ok(kernelSteps > 1000);
 const stepsAtExit = kernelSteps; pump(5); assert.equal(kernelSteps, stepsAtExit + 5);
-console.log(`Kernel/I/O/shell session passed${lvgl ? ` with actual LVGL (${flushCount} flushes)` : " with host callbacks"}: generated lexer/parser, commands, quoting, invalid/unsupported input, bounds, ls/cd/cwd/escaped names, 1024-entry ls, 1000 repeated parses, stable stack/memory (shell ${initialPages}, I/O ${ioPages} pages), ${kernelSteps} kernel steps, drained/closed streams.`);
+console.log(`Kernel/I/O/shell session passed${lvgl ? ` with actual LVGL (${flushCount} flushes)` : " with host callbacks"}: generated lexer/parser, commands, quoting, invalid/unsupported input, bounds, ls/cd/cwd/escaped names, 1024-entry ls, relative/absolute/UTF-8 cat, 1000 repeated parses, stable stack/memory (shell ${initialPages}, I/O ${ioPages} pages), ${kernelSteps} kernel steps, drained/closed streams.`);
