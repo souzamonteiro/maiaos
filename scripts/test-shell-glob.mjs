@@ -22,7 +22,7 @@ async function shell({files={},capacity=31}={}) {
   const openedPaths=[],openDirectory=vfs.opendir.bind(vfs);
   vfs.opendir=path=>{const handle=openDirectory(path);if(handle>0)openedPaths.push(path);return handle;};
   let exit=null,steps=0;
-  const host=createMaiaHostImports({vfs,graphics,pipeline:{start(){throw new Error("Unexpected pipeline in builtin-only regression");},wait(){throw new Error("Unexpected pipeline wait");}},streams:broker,processId:3,onProcessExit:code=>{exit=code;}});
+  const host=createMaiaHostImports({vfs,graphics,pipeline:{cancel(){throw new Error("Unexpected pipeline cancellation");},start(){throw new Error("Unexpected pipeline in builtin-only regression");},wait(){throw new Error("Unexpected pipeline wait");}},streams:broker,processId:3,onProcessExit:code=>{exit=code;}});
   const instance=await WebAssembly.instantiate(module,host.imports);host.attachInstance(instance);
   instance.exports.maia_app_start();
   const stack=instance.exports.__stack_ptr.value, memory=instance.exports.memory.buffer.byteLength;

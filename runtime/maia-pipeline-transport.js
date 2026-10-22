@@ -5,6 +5,7 @@ export class KernelPipelineTransport {
   this.controller=controller;this.streams=streams;this.spawn=spawn;this.stop=stop;this.pipeCapacity=pipeCapacity;this.owners=new Map();this.inFlight=null;
  }
  start(pid,packet,context){const group=this.controller.start(pid,packet);if(group>0)this.owners.set(group,{pid,context});return group;}
+ cancel(pid,group){return this.controller.cancel(pid,group);}
  wait(pid,group,capacity){const result=this.controller.wait(pid,group,capacity);if(result instanceof Uint8Array)this.owners.delete(group);return result;}
  pump(){
   if(this.inFlight)return this.inFlight;

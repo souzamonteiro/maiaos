@@ -55,5 +55,14 @@ rollback and reaping. The reference host stores instances and transports kernel
 packets; its runningProcesses set is not the process policy. The shell submits
 expanded generated-AST cat pipelines, and separate cat.wasm workers receive
 immutable argv and explicitly delegated caller VFS identity. Real I/O/LVGL stays
-separate from command execution. General exec/jobs and pipeline redirection are
+separate from command execution. General exec/jobs are
 outside this first slice. See [the approved lifecycle/packet contract](../planning/SHELL_PIPELINE_PROCESS_CONTRACT.md).
+
+
+Pipeline stdout redirection uses the approved version 2 plan: kernel-owned
+bounded pipe from the last worker to shell stream 3, with the shell runnable to
+drain bytes into its existing VFS writer. Worker manifests remain read-only.
+Owner-only pipeline_cancel uses kernel rollback; final wait/reap requires an
+acknowledged owner-endpoint release. Parsing/expansion remain generated/guest
+work, and the host never interprets a redirection path. See the
+[output contract](../planning/SHELL_PIPELINE_OUTPUT_REDIRECTION.md).

@@ -2,6 +2,111 @@
 
 ## Current objective/result
 
+### Latest checkpoint — 2026-10-22, pipeline output composition validated locally
+
+Owner explicitly approved the exact SHELL_PIPELINE_OUTPUT_REDIRECTION.md contract
+and implementation, excluding commit/push/npm/versions. The feature is implemented
+in MaiaOS only; main/HEAD remains published baseline `09b566b`. No dependency
+source, gitlink, package version, cat worker or I/O artifact changes. The earlier
+preparation checkpoint below is historical; its pending-approval status is now
+superseded.
+
+Implemented: generated-tree validation permits exactly one last-stage stdout
+redirect; quote-aware MaiaGlob still expands the target to one word before open.
+The shell validates commands/paths/plan bounds and checks stream 3 is unbound
+before opening a target. Existing flags 14/22 implement create/truncate/append.
+The target is shell-local and never enters argv. Kernel plan v2 adds a fixed
+bounded last-child -> owner:3 pipe and a runnable owner after startup acknowledgments.
+Workers retain v1 argv, read-only capabilities, separate memories and private
+handles. Existing plan v1 remains supported. process.pipeline gates the new
+owner-only pipeline_cancel import; the kernel owns rollback and acknowledged
+endpoint cleanup before final wait/reap. No new capability or VFS API was added.
+
+The shell drains/retains partial VFS writes, yields on -6, cancels on failure,
+preserves accepted prefixes, and closes/reaps before returning a terminal prompt.
+A successful target open can truncate even if launch later fails; output is not
+transactional. Launch/trap/cancel/owner-exit cleanup includes acquired owner
+endpoints; collisions never cause the kernel to release an unowned endpoint.
+The shell must yield immediately after submitting a pipeline: integration caught
+an initial same-step read before startup bindings existed. That bug is fixed;
+negative binding/transport tests guard the related cleanup cases.
+
+Changed source areas: apps/kernel/processes.hpp; apps/shell/shell.cpp,
+shell-pipeline.hpp, shell-glob.hpp; runtime controller/transport/import/capability
+mapping; browser boot cancellation forwarding. Updated contracts/ABI/architecture/
+README and tests. Built artifacts: kernel.wasm 40366 bytes (two initial pages),
+shell.wasm 1268305 bytes (18 initial pages). kernel.js loader remains identical;
+cat.wasm/io.wasm and generated grammar/parser sources remain unchanged. All guest
+builds use the repository's published MaiaCpp -> MaiaC -> MaiaWASM chain.
+
+Verification PASS (logs outside Git, /tmp/maiaos-output-*.log):
+- `npm run build:kernel -- --check-c89` and
+  `npm run build:shell -- --check-c89`: strict C89 checks and actual WASM builds.
+- `npm test`: 52 passed, zero failed; includes cancel identifier validation and
+  manifest-request/host-grant enforcement for the additive import.
+- `npm run test:kernel-processes-native`: native C++98 ASan/UBSan,
+  8192 malformed packets and 100 v1 + 100 v2/completion/cancel lifecycles.
+- `npm run test:kernel-processes`: real WASM v1/v2 ownership, malformed/permission
+  checks, owner runnable policy, occupied-owner rejection, immutable v1 argv,
+  short wait atomicity, cleanup retry/ack, cancel during START/PIPE/running/
+  completion, trap, collisions, parent exit and orphan/full quota reuse.
+- `npm run test:pipeline-workers`: actual independent cat WASM memories,
+  256KiB binary data through 31-byte pipes including v2 owner return pipe,
+  cancellation/recovery, failed spawn/trap/parent exit and no surviving resources.
+- `npm run test:shell-pipelines`: production boot/scheduler functions with real
+  kernel/shell/cat/I/O/LVGL, truncate/append, relative/private/quoted/glob targets,
+  two/four stages, binary output, same-file truncation, empty/missing input,
+  prelaunch rejection, worker profile denial, partial writes/-6, real 1MiB quota,
+  accepted failure prefix, stream read error, descriptor collision preservation,
+  late close error and repeated cleanup before prompt. Negative forms additionally
+  assert zero group submissions. This is Node integration, not browser interaction.
+- `npm run test:shell-equivalence`: 5356 raw inputs, exact JS/native C++98/WASM
+  tokens/UTF-16 offsets/complete trees and restored WASM stack.
+- `npm run test:shell-redirection`, `npm run test:shell-files`,
+  `npm run test:shell-glob`, `npm run test:shell-directories`,
+  `npm run test:shell-boot`, `npm run test:io-streams`,
+  `npm run test:shell-lvgl`, `npm run test:lvgl-host`: all passed. The old echo
+  pipeline rejection now checks the appropriate unsupported-command diagnostic;
+  it still verifies no output mutation and never uses a fake pipeline executor.
+- `git diff --check`: passed.
+
+Browser interaction remains pending because the supported in-app browser was
+unavailable in this session (see preparation note); production boot exercised
+under Node/LVGL does not replace that check. Physical-device/MaiaWASMVM execution,
+input/descriptor redirection, general exec/jobs and wc remain outside this slice.
+The next safe action is interactive simulator verification and owner review of
+this uncommitted slice. No commit/push, version or npm action is authorized.
+
+
+### Next-slice preparation — 2026-10-22, after published pipelines
+
+User requested proceeding with simulator validation and pipeline stdout
+redirection. Published baseline is main/origin `09b566b`; the working tree was
+clean at task start. No source, binary, dependency, version or npm changes in
+this preparation step. Added the reviewable proposal
+`docs/planning/SHELL_PIPELINE_OUTPUT_REDIRECTION.md`; its exact public additions
+are NOT yet approved or implemented. AGENTS.md requires approval before public
+API/execution-model edits. Proposed additions: backward-compatible plan v2,
+owner-only pipeline_cancel, kernel-owned return pipe on owner stream 3, and
+runnable owner draining via existing VFS APIs. Cat stays read-only and I/O owns
+LVGL. Consult the proposal for exact layout, ownership, failure and cleanup rules.
+
+Validation in this step: `npm run test:shell-pipelines` PASS again with actual
+production boot functions, kernel scheduler, generated shell AST, MaiaGlob,
+separate cat workers and I/O/LVGL (33 flushes). Log outside Git:
+`/tmp/maiaos-pipeline-composition-baseline.log`. No new feature was tested.
+The existing server responds at http://127.0.0.1:8080/platform/desktop-web/index.html
+with title "MaiaOS · Simulator". Attempting another server found EADDRINUSE; the
+running server was preserved. In-app browser setup reported
+"Browser is not available: iab"; supported browser listing returned []. Browser
+interactive validation was NOT performed and remains pending. Do not substitute
+the Node/LVGL harness for that claim or bypass browser-skill restrictions.
+
+Next safe action: obtain approval for the concrete proposal's public changes,
+then implement and test the bounded pipeline-output composition. No commit/push
+authorization for these new changes has been requested or granted. Prior pipeline
+publication authorization is already fulfilled by 09b566b.
+
 ### Publication checkpoint — 2026-10-22
 
 The owner explicitly authorized commit/push of the complete validated pipeline

@@ -31,11 +31,16 @@ async function setup({failSpawn=0,trap=false,cancelParent=false}={}){
   },stop:async(p,status)=>stop(p,status)});
  function stop(p,status,trapped=false){const worker=workers.get(p);if(worker){worker.host.closeFiles();worker.host.closeStreams();assert.equal(worker.vfs.openHandleCount,0);assert.equal(worker.instance.exports.__stack_ptr.value,worker.stack);assert.equal(worker.instance.exports.memory.buffer.byteLength,worker.pages);workers.delete(p);}else broker.closeProcess(p);k.exit(p,status,trapped);}
  await transport.pump();k.ready(ioPid);k.ready(pid);
- async function run(stages){const group=transport.start(pid,encodePipelinePlan(stages),parent);assert.ok(group>0);let result,output=[];
+ async function run(stages,{output:returned=false,cancelOutput=false}={}){const group=transport.start(pid,encodePipelinePlan(stages,{output:returned}),parent);assert.ok(group>0);let result,output=[],stderr=[],drained=!returned,cancelled=false;
   for(let tick=0;tick<200000;++tick){await transport.pump();const p=k.next();const w=workers.get(p);
    if(w){if(!w.started){w.started=true;w.instance.exports.maia_app_start();}if(trap && w.started){stop(p,1,true);trap=false;}else w.instance.exports.maiaos_step();}
-   const b=broker.read(ioPid,4,7);if(b instanceof Uint8Array&&b.length)output.push(Buffer.from(b));
-   result=transport.wait(pid,group,48);if(result instanceof Uint8Array){for(;;){const tail=broker.read(ioPid,4,4096);if(!(tail instanceof Uint8Array)||!tail.length)break;output.push(Buffer.from(tail));}return {output:Buffer.concat(output),result};}
+   if(returned&&!drained){const bytes=broker.read(pid,3,7);
+    if(bytes instanceof Uint8Array){if(bytes.length)output.push(Buffer.from(bytes));else {broker.close(pid,3);drained=true;}}
+    else if(bytes===-7)drained=true;else assert.equal(bytes,-6);
+    if(cancelOutput&&!cancelled&&output.length){broker.close(pid,3);assert.equal(transport.cancel(pid,group),0);cancelled=true;drained=true;}
+   }
+   const b=broker.read(ioPid,4,7);if(b instanceof Uint8Array&&b.length)(returned?stderr:output).push(Buffer.from(b));
+   result=drained?transport.wait(pid,group,48):-6;if(result instanceof Uint8Array){for(;;){const tail=broker.read(ioPid,4,4096);if(!(tail instanceof Uint8Array)||!tail.length)break;(returned?stderr:output).push(Buffer.from(tail));}if(returned)assert.equal(broker.endpoint(pid,3),null);return {output:Buffer.concat(output),stderr:Buffer.concat(stderr),result};}
    if(result===-7&&parent.stopped&&!workers.size)return {output:Buffer.concat(output),result:null};
    assert.equal(result,-6);
   }throw new Error('Pipeline workers did not complete');
@@ -55,3 +60,18 @@ async function setup({failSpawn=0,trap=false,cancelParent=false}={}){
 for(const options of [{failSpawn:2},{trap:true}]){const s=await setup(options),r=await s.run([['cat','/shared/data'],['cat']]);assert.equal(new DataView(r.result.buffer).getUint32(12,true),1);s.finish();console.log('PASS actual worker rollback '+JSON.stringify(options));}
 
 {const s=await setup({cancelParent:true}),result=await s.run([['cat','/shared/data'],['cat']]);assert.equal(result.result,null);s.finish();console.log('PASS actual parent cancellation during in-flight worker launch');}
+
+{
+ const s=await setup();const r=await s.run([['cat','/shared/data','/shared/data'],['cat'],['cat'],['cat']],{output:true});
+ assert.deepEqual(r.output,Buffer.concat([Buffer.from(s.data),Buffer.from(s.data)]));assert.equal(r.stderr.length,0);
+ const cancelled=await s.run([['cat','/shared/data'],['cat']],{output:true,cancelOutput:true});
+ assert.deepEqual(cancelled.output,Buffer.from(s.data.slice(0,cancelled.output.length)));
+ assert.equal(new DataView(cancelled.result.buffer).getUint32(12,true),1);
+ const recovered=await s.run([['cat','/shared/semi;literal'],['cat']],{output:true});assert.equal(recovered.output.toString(),'LITERAL');
+ s.finish();console.log('PASS actual v2 workers: 256KiB return pipe, owner drain, downstream cancellation and resource recovery');
+}
+for(const options of [{failSpawn:2},{trap:true},{cancelParent:true}]){
+ const s=await setup(options),r=await s.run([['cat','/shared/data'],['cat']],{output:true});
+ if(options.cancelParent)assert.equal(r.result,null);else assert.equal(new DataView(r.result.buffer).getUint32(12,true),1);
+ s.finish();console.log('PASS actual v2 rollback '+JSON.stringify(options));
+}

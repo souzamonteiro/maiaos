@@ -101,7 +101,10 @@ static void resumeExpansion(void)
         if (gExpansionIndex == gExpansionInputCount) {
             for (unsigned int i = 0; i < 1152; ++i) gCommandWords[i] = gExpandedWords[i];
             gExpansionActive = 0;
-            if(gPipelineStageCount>1){beginPipeline(gExpansionCount);return;}
+            if(gPipelineStageCount>1){
+                if(gRedirectFlags && gExpansionCount-gExpansionTargetStart!=1){endExpansion(-100);return;}
+                beginPipeline(gExpansionCount);return;
+            }
             unsigned int count = gExpansionCount;
             if (gRedirectFlags) {
                 if (count - gExpansionTargetStart != 1) { endExpansion(-100); return; }

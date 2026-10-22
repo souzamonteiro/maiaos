@@ -29,7 +29,7 @@ The current system boot chain keeps the Espressif ROM and second-stage bootloade
 |---|---|---|
 | `kernel.wasm` | Implemented | C++98 kernel guest; current browser host starts it and schedules `maiaos_step`. |
 | `io.wasm` | Bounded reference implementation | C++98 terminal service: LVGL, keyboard editing/history and canonical input over bounded streams. |
-| `shell.wasm` | Bounded MVP | Generated C++98 lexer/parser in the guest; eight simple commands through streams/VFS, including bounded multi-operand ls/cd/pwd, MaiaGlob filename expansion and cat with relative/absolute paths plus bounded stdout `>`/`>>` redirection; I/O owns LVGL/events. Kernel-owned cat-only pipelines use separate workers; general compound execution and POSIX conformance remain future work. |
+| `shell.wasm` | Bounded MVP | Generated C++98 lexer/parser in the guest; eight simple commands through streams/VFS, including bounded multi-operand ls/cd/pwd, MaiaGlob filename expansion and cat with relative/absolute paths plus bounded stdout `>`/`>>` redirection; I/O owns LVGL/events. Kernel-owned cat-only pipelines use separate workers and can redirect final stdout with `>`/`>>`; general compound execution and POSIX conformance remain future work. |
 | `desktop.wasm` | Planned | Graphical desktop/session and window-management guest. |
 
 All MaiaOS WASM guests are built with the Maia Suite, not Emscripten. C++98 sources use MaiaCpp in AST-strict mode to emit C89, then MaiaC emits and validates WebAssembly using the in-repository MaiaWASM toolchain. MaiaCC generates parsers from EBNF. Emscripten is currently used only to build the separate LVGL-WASM browser platform module.

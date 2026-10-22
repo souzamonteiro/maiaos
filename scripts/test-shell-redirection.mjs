@@ -20,7 +20,7 @@ async function shell({files={},capacity=31}={}) {
   const vfs=new MemoryVfsAdapter({appId:manifest.id,maxOpenFiles:manifest.limits.openFiles,files});
 
   let exit=null,steps=0;
-  const host=createMaiaHostImports({vfs,graphics,pipeline:{start(){throw new Error("Unexpected pipeline in builtin-only regression");},wait(){throw new Error("Unexpected pipeline wait");}},streams:broker,processId:3,onProcessExit:code=>{exit=code;}});
+  const host=createMaiaHostImports({vfs,graphics,pipeline:{cancel(){throw new Error("Unexpected pipeline cancellation");},start(){throw new Error("Unexpected pipeline in builtin-only regression");},wait(){throw new Error("Unexpected pipeline wait");}},streams:broker,processId:3,onProcessExit:code=>{exit=code;}});
   const instance=await WebAssembly.instantiate(module,host.imports);host.attachInstance(instance);
   instance.exports.maia_app_start();
   const stack=instance.exports.__stack_ptr.value, memory=instance.exports.memory.buffer.byteLength;
@@ -66,7 +66,9 @@ const contents=(s,path)=>Buffer.from(s.vfs.files.get(path));
  assert.equal(s.text('echo hi > ""'),'shell: invalid redirection path\nmaia> ');
  for(const target of ['/system/x','/apps/x','/home/another/private'])assert.equal(s.text('echo NEVER > '+target),'shell: redirection: permission denied\nmaia> ');
  for(const target of ['/tmp','/tmp/in/child'])assert.match(s.text('echo NEVER > '+target),/^shell: redirection: /);
- for(const command of ['echo hidden > /tmp/syntax > /tmp/other','echo hidden 2> /tmp/syntax','echo hidden < /tmp/in','echo hidden | cat > /tmp/syntax','echo hidden > /tmp/syntax &'])assert.equal(s.text(command),'unsupported syntax: simple commands only\nmaia> ');
+ for(const command of ['echo hidden > /tmp/syntax > /tmp/other','echo hidden 2> /tmp/syntax','echo hidden < /tmp/in','echo hidden > /tmp/syntax &'])assert.equal(s.text(command),'unsupported syntax: simple commands only\nmaia> ');
+ // Final-stage redirection now reaches command-policy validation; echo is still not a pipeline worker.
+ assert.equal(s.text('echo hidden | cat > /tmp/syntax'),'shell: unsupported pipeline command\nmaia> ');
  assert.equal(s.vfs.files.has('/tmp/syntax'),false);
  assert.equal(s.text('echo '+Array(10).fill('a').join(' ')+' > /tmp/limit'),'maia> ');
  const before=contents(s,'/tmp/limit');assert.equal(s.text('echo '+Array(11).fill('a').join(' ')+' > /tmp/limit'),'shell input limit exceeded\nmaia> ');assert.deepEqual(contents(s,'/tmp/limit'),before);

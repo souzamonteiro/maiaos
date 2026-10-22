@@ -303,8 +303,9 @@ The shell requests `vfs.write` and the browser explicitly grants it. No new impo
 signature or status code is added. Command stdout drains to VFS; stderr, startup
 and one final prompt remain on terminal streams. Errors cancel remaining command
 work, close handles and preserve only bytes already accepted. Multiple/numbered/
-input redirects, pipelines, compound execution and process spawning remain
-unsupported. Kernel scheduling and I/O-owned LVGL rendering are unchanged.
+input redirects and compound execution remain unsupported. Kernel-owned cat
+pipelines and their output composition follow the extensions below. I/O-owned
+LVGL rendering is unchanged.
 
 Checks: strict `build:shell -- --check-c89`, `npm test`, `test:shell-redirection`,
 `test:shell-files`, `test:shell-glob`, `test:shell-directories`, `test:shell-boot`,
@@ -329,7 +330,35 @@ at most 12 words/95 UTF-8 bytes each/1536 plan bytes, <=4096-byte pipe edges, <=
 open files per worker, <=32 reserved pages per worker/128 per all worker groups,
 16 total process slots and four group slots. Effective worker VFS identity is
 explicitly delegated from the caller; package identity and private handles remain
-separate. General spawn/exec/dup, job control, input redirection and composing
-pipeline with redirection remain unsupported. Kernel-owned scheduling runs the
+separate. General spawn/exec/dup, job control and input redirection remain unsupported.
+Final-stage stdout composition is the approved extension below. Kernel-owned scheduling runs the
 existing kernel GUI plus approved guest steps; native-reference tests do not
 claim preemption/fuel or device timing.
+
+
+## Pipeline output composition (2026-10-22)
+
+The approved additive `maia.process.pipeline_cancel(i32 group)->i32` import uses
+process.pipeline and captured caller identity: 0 accepts/idempotently repeats
+owned cancellation, -3 denies a foreign owner, -7 denotes an unknown/reaped group,
+and the host rejects invalid group integers with -1. It rolls back through the
+kernel, aggregates failure as status 1 and leaves reaping to pipeline_wait.
+
+pipeline_start additionally accepts version 2, a 24-byte header followed by the
+same packed tables/strings as version 1: (2,stages,words,stringBytes,outputMode=1,
+reserved=0), all u32 little-endian. Table offsets are absolute and begin at 24.
+The kernel additionally checks vfs.write, reserves owner stream 3 for a <=4096
+byte return pipe and admits one unreaped group per owner (-4 when busy). Targets
+and VFS flags remain shell-local and never enter child argv. Workers keep argv
+version 1 and read-only capabilities. The owner becomes runnable with its workers
+after all startup acknowledgements, preventing output-drain deadlock.
+
+The shell drains output to EOF before waiting. A completed version 2 wait first
+requests kernel RELEASE(owner,3), returns -6 until acknowledgement, then returns
+and reaps the unchanged version 1 completion packet. Insufficient capacity does
+not discard output or initiate cleanup. Early wait can discard remaining owner
+output. Rollback releases owned endpoints before completion, including after
+in-flight startup/owner exit; an existing colliding endpoint is never acquired or
+closed. Existing VFS file limits, append semantics and asynchronous durability
+are unchanged. See the exact
+[approved output contract](../planning/SHELL_PIPELINE_OUTPUT_REDIRECTION.md).

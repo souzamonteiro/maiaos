@@ -301,12 +301,12 @@ The grammar test validates parsing only. The implemented MVP commands are listed
 
 1. **Done:** browser app launch, LVGL window, event-driven line editing with cursor/history, simple-command execution, and the eight-command shell guest.
 2. **Done in reference tests:** directory enumeration, bounded ls/cd/pwd, isolated cwd and cleanup.
-3. **Later:** input/descriptor redirection, pipelines, other expansion and process/job semantics, each behind an explicit host contract.
+3. **Later:** input/descriptor redirection, general program stages, other expansion and process/job semantics, each behind an explicit host contract.
 4. **Long term:** persistence improvements and differential tests for the POSIX shell features MaiaOS chooses to support.
 
 ## Next acceptance criteria
 
-Review directory navigation interactively in the simulator. Read-only `cat` now supports VFS-authorized relative/absolute paths using the same cwd; review file output interactively. Keep stderr, cleanup and nonblocking I/O regressions; process spawning and pipelines need their own kernel lifecycle contract.
+Review directory navigation interactively in the simulator. Read-only `cat` now supports VFS-authorized relative/absolute paths using the same cwd; review file output interactively. Keep stderr, cleanup and nonblocking I/O regressions; cat pipelines now use the approved kernel lifecycle contract; broader process execution remains future work.
 
 ## References
 
@@ -348,7 +348,8 @@ release handles. Writes yield across bounded partial transfers. The browser
 shares backing records while enforcing private application homes and handles;
 IndexedDB persistence remains asynchronous and errors are reported by the host.
 This does not implement fsync or claim microSD durability. Numbered/input/multiple
-redirects, pipelines and compound execution are rejected before dispatch.
+redirects and compound execution are rejected before dispatch. Cat pipelines may
+redirect the last stage as described below.
 
 Build: `npm run build:shell -- --check-c89`. Validate with
 `npm run test:shell-redirection`, `npm test` and `npm run test:shell-lvgl`.
@@ -370,7 +371,7 @@ arguments resolve against shell cwd and must fit the 95-byte canonical wire word
 Groups retain at most 12 expanded words total. Worker VFS handles/memories are
 private; the kernel-approved effective namespace is the caller shell's own home
 plus shared/read-only mounts. Foreign homes remain denied. No options, general
-exec, job control, pipeline+redirection composition or arbitrary program stages
+exec, job control or arbitrary program stages
 are added; unsupported forms are rejected before child creation.
 
 Build `npm run build:kernel -- --check-c89`, `npm run build:cat -- --check-c89`
@@ -378,3 +379,25 @@ and `npm run build:shell -- --check-c89`. Run `npm run test:shell-pipelines`,
 `npm run test:pipeline-workers`, `npm run test:kernel-processes` and
 `npm run test:kernel-processes-native`. See the
 [approved pipeline contract](../../docs/planning/SHELL_PIPELINE_PROCESS_CONTRACT.md).
+
+
+### Redirecting the final pipeline stage
+
+`cat /system/welcome.txt | cat > /tmp/result` creates/truncates the output;
+`cat /system/welcome.txt | cat >> /tmp/result` appends. One redirection may occur
+anywhere within the last stage's SimpleCommand, and its quoted/glob target must
+expand to exactly one path. Earlier-stage redirection is outside this scope.
+The 12-word expansion limit includes the target. Syntax, command and path-limit
+validation precede target opening; later launch failure can leave a created or
+truncated output, as with existing simple-command redirection.
+
+The kernel returns final stdout through a bounded stream on the shell's private
+handle 3 and schedules the shell alongside workers. The shell drains copied bytes
+through its existing authorized VFS writer; cat workers remain read-only. Stderr
+and prompts stay on the terminal. Output failure cancels the owned group and
+preserves accepted bytes. The prompt returns only after group cleanup and target
+close. Version 1 plans remain supported; the additive version 2 plan and
+owner-only pipeline_cancel are specified in the
+[approved output contract](../../docs/planning/SHELL_PIPELINE_OUTPUT_REDIRECTION.md).
+The pipeline/worker/kernel suites listed above cover this composition and failure
+recovery through real WASM; browser interaction remains a separate check.

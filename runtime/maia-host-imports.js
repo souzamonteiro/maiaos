@@ -318,6 +318,10 @@ export function createMaiaHostImports({
 
   if (pipeline) {
     if (typeof pipeline.start !== "function" || typeof pipeline.wait !== "function") throw new TypeError("Invalid kernel pipeline transport");
+    if (typeof pipeline.cancel === "function") imports["maia.process"].pipeline_cancel = group => {
+      if (!Number.isInteger(group) || group<=0 || group>0x7fffffff) return STATUS.INVALID_ARGUMENT;
+      return pipeline.cancel(group);
+    };
     imports["maia.process"].pipeline_start = (pointer,length) => {
       if (!Number.isInteger(length) || length<16 || length>1536) return STATUS.INVALID_ARGUMENT;
       try {validateGuestRange(guestMemory,pointer,length);} catch {return STATUS.INVALID_ARGUMENT;}

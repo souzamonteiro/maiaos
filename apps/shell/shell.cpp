@@ -15,6 +15,7 @@ MAIA_IMPORT("maia.vfs", "opendir") int32_t maia_vfs_opendir(int32_t pointer, int
 MAIA_IMPORT("maia.vfs", "readdir") int32_t maia_vfs_readdir(int32_t handle, int32_t pointer, int32_t capacity);
 MAIA_IMPORT("maia.vfs", "close") int32_t maia_vfs_close(int32_t handle);
 MAIA_IMPORT("maia.process", "pipeline_start") int32_t maia_pipeline_start(int32_t pointer,int32_t length);
+MAIA_IMPORT("maia.process", "pipeline_cancel") int32_t maia_pipeline_cancel(int32_t group);
 MAIA_IMPORT("maia.process", "pipeline_wait") int32_t maia_pipeline_wait(int32_t group,int32_t pointer,int32_t capacity);
 MAIA_IMPORT("maia.process", "exit") void maia_process_exit(int32_t status);
 }
@@ -32,6 +33,7 @@ static char gCommandWords[1152];
 static unsigned int gWordStage[12],gExpandedStage[12],gPipelineNodeIds[4];
 static unsigned int gPipelineStageCount=0;
 static int gPipelineGroup=0;
+static unsigned int gPipelineOutput=0,gPipelineDrained=0;
 static uint8_t gPipelinePlan[1536],gPipelineResult[48];
 static uint8_t gReadBuffer[128];
 static char gOutputBuffer[263];
@@ -317,7 +319,9 @@ static void abortCommandOutput(void)
     if (gDirectoryHandle >= 0) { maia_vfs_close(gDirectoryHandle); gDirectoryHandle = -1; }
     if (gRedirectHandle >= 0) { maia_vfs_close(gRedirectHandle); gRedirectHandle = -1; }
     gCatActive = 0; gLsActive = 0;
-    writeText(2, "shell: redirection write failed\n"); completeCommand();
+    writeText(2, "shell: redirection write failed\n");
+    if(gPipelineGroup>0){maia_stream_close(3);gPipelineDrained=1;maia_pipeline_cancel(gPipelineGroup);}
+    else completeCommand();
 }
 
 static void endListing(int status)
@@ -407,7 +411,7 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
         if (textEquals(node->name, "Assignment")) return 2;
         if (textEquals(node->name, "Redirection")) ++redirections;
     }
-    if (simpleCommands > 4 || redirections > 1 || (simpleCommands>1 && (redirections || pipelines!=1))) return 2;
+    if (simpleCommands > 4 || redirections > 1 || (simpleCommands>1 && pipelines!=1)) return 2;
     gPipelineStageCount=simpleCommands;
     // Decode argv first, then the redirect target, regardless of source position.
     for (unsigned int pass = 0; pass < 2; ++pass) {
@@ -419,6 +423,8 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
         while (parent >= 0) {
             const MaiaShellParseTreeNode* ancestor = tree->nodes + parent;
             if (textEquals(ancestor->name, "Redirection")) redirected = 1;
+            if (redirected && simpleCommands>1 && textEquals(ancestor->name,"SimpleCommand")
+                && static_cast<unsigned int>(parent)!=gPipelineNodeIds[simpleCommands-1]) return 2;
             parent = ancestor->parent;
         }
         if(simpleCommands>1 && node->parent>=0 && textEquals(tree->nodes[node->parent].name,"Pipeline")
@@ -600,7 +606,7 @@ extern "C" __attribute__((visibility("default"))) void maiaos_step(void)
         }
         if (gExitRequested) { finish(); return; }
         if (gPipelineGroup>0) { resumePipeline(); if(gPipelineGroup>0)return; continue; }
-        if (gExpansionActive) { resumeExpansion(); continue; }
+        if (gExpansionActive) { resumeExpansion(); if(gPipelineGroup>0)return; continue; }
         if (gCatHandle >= 0) { resumeCat(); continue; }
         if (gCatActive) { resumeCatOperands(); continue; }
         if (gDirectoryHandle >= 0) { resumeListing(); continue; }

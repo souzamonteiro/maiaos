@@ -277,6 +277,7 @@ async function startProcess({ manifest, bytes, role, entryName, stepName, pid = 
     pipeline: manifest.capabilities.includes("process.pipeline") ? {
       start: packet => processPipeline.start(process.pid, packet, process),
       wait: (group, capacity) => processPipeline.wait(process.pid, group, capacity),
+      cancel: group => processPipeline.cancel(process.pid, group),
     } : null,
     log: (level, message) => {
       status.textContent = message;

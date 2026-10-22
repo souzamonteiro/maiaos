@@ -23,6 +23,7 @@ const IMPORT_CAPABILITIES = Object.freeze({
   "maia.time.monotonic_ms": "time.monotonic",
   "maia.process.pipeline_start": "process.pipeline",
   "maia.process.pipeline_wait": "process.pipeline",
+  "maia.process.pipeline_cancel": "process.pipeline",
   "maia.process.args_size": "process.args",
   "maia.process.args_copy": "process.args",
   "maia.process.exit": "process.exit",

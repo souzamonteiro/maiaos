@@ -1,4 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
+import {assertManifestCapabilities} from '../runtime/maia-capabilities.js';
 import {createMaiaHostImports} from '../runtime/maia-host-imports.js';
 import {MemoryVfsAdapter} from '../runtime/maia-vfs.js';import {MaiaStreamBroker} from '../runtime/maia-streams.js';
 const never=()=>{throw new Error('Unexpected graphics');};
@@ -22,4 +23,19 @@ test('privileged cross-process aliases preserve references and bounded EOF reade
  b.delegate(2,1,3,1);b.closeProcess(2);assert.equal(b.read(1,0,1),-6);assert.equal(b.write(3,1,Uint8Array.of(1,2,3,4)),3);
  b.closeProcess(3);assert.deepEqual([...b.read(1,0,3)],[1,2,3]);assert.equal(b.read(1,0,1).length,0);b.closeProcess(1);assert.equal(b.stats.pipes,0);
  b.connectEof({processId:4,handle:0},1);assert.equal(b.read(4,0,1).length,0);assert.throws(()=>b.connectEof({processId:4,handle:0},1));b.closeProcess(4);assert.equal(b.stats.pipes,0);
+});
+
+test('pipeline cancellation validates group identifiers before forwarding to the owner transport',()=>{
+ let cancelled=[];const host=createMaiaHostImports({graphics,vfs:new MemoryVfsAdapter(),pipeline:{start:()=>7,wait:()=>-6,cancel:group=>{cancelled.push(group);return -3;}}});
+ const api=host.imports['maia.process'];for(const bad of [-1,0,1.5,0x80000000,NaN])assert.equal(api.pipeline_cancel(bad),-1);
+ assert.deepEqual(cancelled,[]);assert.equal(api.pipeline_cancel(7),-3);assert.deepEqual(cancelled,[7]);
+});
+
+test('pipeline_cancel import requires both manifest request and host grant',()=>{
+ const str=value=>[value.length,...new TextEncoder().encode(value)];
+ const imported=[1,...str('maia.process'),...str('pipeline_cancel'),0,0];
+ const module=new WebAssembly.Module(Uint8Array.from([0,97,115,109,1,0,0,0,1,6,1,96,1,127,1,127,2,imported.length,...imported]));
+ assert.doesNotThrow(()=>assertManifestCapabilities(module,{capabilities:['process.pipeline']},['process.pipeline']));
+ assert.throws(()=>assertManifestCapabilities(module,{capabilities:[]},['process.pipeline']),/Manifest does not request/);
+ assert.throws(()=>assertManifestCapabilities(module,{capabilities:['process.pipeline']},[]),/Host policy denies/);
 });

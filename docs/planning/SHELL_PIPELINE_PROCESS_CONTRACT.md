@@ -1,3 +1,8 @@
+> Extension approved 2026-10-22: final-stage stdout `>`/`>>` composition, plan v2
+> and owner-only cancellation are specified in
+> [SHELL_PIPELINE_OUTPUT_REDIRECTION.md](SHELL_PIPELINE_OUTPUT_REDIRECTION.md).
+> The original v1 scope/exclusions below describe the initial published slice.
+
 # Pipeline process contract — proposal for review
 
 2026-10-22. Fourth slice in the owner's requested order. This document is a

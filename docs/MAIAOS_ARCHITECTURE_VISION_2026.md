@@ -83,7 +83,7 @@ flowchart TB
 | `desktop.wasm` | Planned | Future graphical desktop/session guest; it is distinct from the current LVGL-WASM browser platform module. |
 | Calculator and Clock `app.wasm` | Implemented | C++98 example apps built through MaiaCpp -> MaiaC and launched with manifests. |
 
-The intended system layering is platform boot host -> `kernel.wasm` -> I/O service (`io.wasm`) -> command shell (`shell.wasm`) and graphical desktop (`desktop.wasm`). The reference simulator now starts the kernel plus I/O/shell guests with the approved bounded stream ABI; a kernel-owned process/group slice now runs cat-only pipelines with separate workers; desktop, native-device boot and general IPC/exec/job management remain planned. See [ABI v0](specifications/abi-v0.md) and [the implemented vertical slice](planning/SHELL_IO_VERTICAL_SLICE.md).
+The intended system layering is platform boot host -> `kernel.wasm` -> I/O service (`io.wasm`) -> command shell (`shell.wasm`) and graphical desktop (`desktop.wasm`). The reference simulator now starts the kernel plus I/O/shell guests with the approved bounded stream ABI; a kernel-owned process/group slice now runs cat-only pipelines with separate workers and bounded final-stage stdout redirection; desktop, native-device boot and general IPC/exec/job management remain planned. See [ABI v0](specifications/abi-v0.md) and [the implemented vertical slice](planning/SHELL_IO_VERTICAL_SLICE.md).
 
 ## 4. Boot and recovery
 
