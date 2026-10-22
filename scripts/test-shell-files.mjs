@@ -55,7 +55,8 @@ async function shell({files={},capacity=31}={}) {
   assert.equal(s.text('cat ../folder/./note.txt'),'shared\nmaia> ');
   assert.equal(s.text('cat /shared/empty'),'maia> ');
   assert.equal(s.text('cat /shared/no-newline'),'last linemaia> ');
-  for(const source of ['cat','cat a b','cat -','cat -n','cat -name'])assert.equal(s.text(source),'usage: cat <file>\nmaia> ');
+  for(const source of ['cat','cat -','cat -n','cat -name'])assert.equal(s.text(source),'usage: cat <file> [file ...]\nmaia> ');
+  assert.equal(s.text('cat a b'),'cat: cannot open file\ncat: cannot open file\nmaia> ');
   assert.equal(s.text('cat ""'),'cat: invalid path\nmaia> ');
   for(const source of ['cat absent','cat /shared/folder'])assert.equal(s.text(source),'cat: cannot open file\nmaia> ');
   assert.equal(s.text('cd ..'),'maia> ');assert.equal(s.text('cat ./-name'),'dash\nmaia> ');
@@ -93,9 +94,12 @@ async function shell({files={},capacity=31}={}) {
   assert.equal(s.untilPrompt().toString(),'x'.repeat(4096)+'maia> ');s.finish();
 }
 {
-  const s=await shell({files:{'/tmp/closed':'x'.repeat(4096)}});s.send('cat /tmp/closed');s.step();
+  const s=await shell({files:{'/tmp/closed':'x'.repeat(4096),'/tmp/never':'NEVER'}});
+  const paths=[],open=s.vfs.open.bind(s.vfs);s.vfs.open=(path,flags)=>{paths.push(path);return open(path,flags);};
+  s.send('cat /tmp/closed /tmp/never');s.step();
   assert.equal(s.vfs.openHandleCount,1);s.broker.closeProcess(2);s.step();
-  assert.equal(s.exit,1);assert.equal(s.vfs.openHandleCount,0);assert.equal(s.broker.stats.pipes,0);s.stable();
+  assert.equal(s.exit,1);assert.equal(s.vfs.openHandleCount,0);assert.equal(s.broker.stats.pipes,0);
+  assert.deepEqual(paths,['/tmp/closed'],'Closed peer prevents subsequent operands from opening');s.stable();
 }
 {
   const data=Buffer.from([0,0xff,0xe2,0x82,0xac,10]);const s=await shell({files:{'/tmp/eof':data}});
@@ -109,4 +113,43 @@ async function shell({files={},capacity=31}={}) {
   const s=await shell({files:{[dir+'/file']:''}});for(const segment of segments)assert.equal(s.text('cd '+segment),'maia> ');
   assert.equal(s.text('cat file'),'cat: invalid path\nmaia> ');assert.equal(s.text('pwd'),dir+'\nmaia> ');s.finish();
 }
-console.log('Actual read-only cat WASM passed: relative/absolute/quoted Unicode paths, home isolation, exact 128KiB binary output through a 31-byte ring, usage/errors/quotas, 1000 reads, backpressure, closed peer, EOF and stable stack/memory.');
+{
+  const s=await shell({files:{'/shared/multi/b.txt':'B','/shared/multi/a.txt':'A',
+    '/shared/multi/é file.txt':'UTF8','/shared/multi/empty':'',
+    '/home/another/private':'NEVER','/shared/multi/next':'NEXT'}});
+  s.text('cd /shared/multi');
+  let peak=0,opens=0;const open=s.vfs.open.bind(s.vfs);
+  s.vfs.open=(...args)=>{const handle=open(...args);++opens;peak=Math.max(peak,s.vfs.openHandleCount);return handle;};
+  assert.equal(s.text('cat b.txt a.txt b.txt'),'BABmaia> ');
+  assert.equal(s.text('cat [ab].txt'),'ABmaia> ');
+  assert.equal(s.text('cat empty a.txt "é file.txt"'),'AUTF8maia> ');
+  assert.equal(s.text('cat a.txt missing b.txt'),'Acat: cannot open file\nBmaia> ');
+  assert.equal(s.text('cat a.txt /home/another/private b.txt'),'Acat: permission denied\nBmaia> ');
+  assert.equal(s.text('cat a.txt "" b.txt'),'Acat: invalid path\nBmaia> ');
+  const before=opens;
+  assert.equal(s.text('cat a.txt -n b.txt'),'usage: cat <file> [file ...]\nmaia> ');
+  assert.equal(opens,before,'Invalid options reject argv before opening any file');
+  for(let i=0;i<200;++i)assert.equal(s.text('cat a.txt b.txt'),'ABmaia> ');
+  assert.equal(peak,1,'Concatenation keeps at most one file open');s.stable();s.finish();
+}
+{
+  const a=Uint8Array.from({length:65536},(_,i)=>i%256),b=Uint8Array.from([0xff,0,10,0xe2,0x82,0xac]);
+  const s=await shell({files:{'/tmp/a':a,'/tmp/b':b}});
+  assert.deepEqual(s.run('cat /tmp/a /tmp/b /tmp/a'),Buffer.concat([Buffer.from(a),Buffer.from(b),Buffer.from(a),prompt]));
+  s.stable();s.finish();
+}
+{
+  const s=await shell({files:{'/tmp/first':'x'.repeat(300),'/tmp/second':'SECOND'}});
+  let reads=0;const read=s.vfs.read.bind(s.vfs);
+  s.vfs.read=(handle,count)=>++reads===2?-3:read(handle,count);
+  assert.equal(s.text('cat /tmp/first /tmp/second'),'x'.repeat(128)+'cat: read failed\nSECONDmaia> ');
+  assert.equal(s.vfs.openHandleCount,0);s.finish();
+}
+{
+  const s=await shell({files:{'/tmp/a':'A','/tmp/b':'B'}});
+  s.send('cat /tmp/a /tmp/b',false);s.broker.close(2,3);const chunks=[];
+  for(let tick=0;tick<40;++tick){s.step();const bytes=s.receive();if(bytes instanceof Uint8Array)chunks.push(Buffer.from(bytes));}
+  assert.equal(s.exit,0);assert.equal(Buffer.concat(chunks).toString(),'AB');
+  assert.equal(s.vfs.openHandleCount,0);s.broker.closeProcess(2);s.stable();
+}
+console.log('Actual read-only cat WASM passed: multiple operands/glob order/continued errors/one open file, relative/absolute/quoted Unicode paths, home isolation, exact 128KiB binary output through a 31-byte ring, usage/errors/quotas, 1000 reads, backpressure, closed peer, EOF and stable stack/memory.');

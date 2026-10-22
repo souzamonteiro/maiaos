@@ -249,7 +249,7 @@ Checks: `npm test`, `npm run test:shell-directories`, `npm run test:shell-lvgl`,
 
 ## Read-only cat consumer extension (2026-10-21)
 
-No ABI/import/capability change. The shell now normalizes one file operand using
+No ABI/import/capability change. The initial slice normalizes one file operand using
 its own cwd and the existing 1023-byte path limit, then calls existing
 `maia.vfs.open/read/close` with READ only. Output preserves file bytes and adds no
 newline. Missing/excess operands and options produce a usage diagnostic; stdin,
@@ -269,3 +269,13 @@ output, EOF/closed-peer cleanup and 1000 reads are covered by
 ## Evolution
 
 Freeze the wider ABI only after reference and device integration tests. Add APIs additively and preserve versioned compatibility. Avoid assuming Memory64 addresses fit in i32; this profile explicitly requires memory32.
+
+## Multi-file cat consumer extension
+
+The shell now accepts `cat <file> [file ...]`, preserving existing VFS/stream
+imports and capabilities. It consumes the final expanded argv in order, opens
+one READ file at a time and concatenates exact bytes without extra separators.
+Errors close the current file and continue with later operands; one prompt
+follows completion. No stdin/options/exit-status extension is introduced.
+See [multi-file contract](../planning/SHELL_CAT_MULTIPLE_FILES.md) for exact
+limits, error policy and actual WASM/LVGL verification.

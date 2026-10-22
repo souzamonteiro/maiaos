@@ -45,6 +45,7 @@ let nextLabel = 1;
 let exitCode = null;
 const vfs = new MemoryVfsAdapter({ appId: manifest.id, maxOpenFiles: manifest.limits.openFiles, files: {
   "/shared/folder with space/child/note.txt": "fixture\n",
+  "/shared/cat-batch/a.txt": "A\n", "/shared/cat-batch/b.txt": "B\n",
   "/shared/empty.txt": "", "/shared/no-newline.txt": "tail",
   "/home/org.maiaplatform.shell/note.txt": "own home\n",
   "/home/another/private.txt": "MUST NOT LEAK",
@@ -164,7 +165,7 @@ submitText("cat /system/welcome.txt");
 const longEcho = `${"A".repeat(70)} ${"B".repeat(70)}`;
 submitText(`echo ${longEcho}`);
 const priorOutput = labels.get(outputHandle);
-assert.match(priorOutput, /Commands: help, echo, pwd, ls \[path \.\.\.\], cd \[path\], cat <file>, clear, exit/);
+assert.match(priorOutput, /Commands: help, echo, pwd, ls \[path \.\.\.\], cd \[path\], cat <file> \[file \.\.\.\], clear, exit/);
 assert.match(priorOutput, /echo hello\nhello/);
 assert.match(priorOutput, /pwd\n\/\n/);
 assert.match(priorOutput, /C\+\+ kernel read this text through maia\.vfs/);
@@ -241,8 +242,11 @@ const fileCases = [
   ["cat absent", "cat: cannot open file\n"], ["cat /shared/empty.txt", ""],
   ["cat /home/another/private.txt", "cat: permission denied\n"],
   ["cd", ""], ["cat note.txt", "own home\n"],
-  ["cat", "usage: cat <file>\n"], ["cat -n", "usage: cat <file>\n"],
-  ["cat one two", "usage: cat <file>\n"], ['cat ""', "cat: invalid path\n"],
+  ["cat", "usage: cat <file> [file ...]\n"], ["cat -n", "usage: cat <file> [file ...]\n"],
+  ["cat one two", "cat: cannot open file\ncat: cannot open file\n"],
+  ["cat /shared/cat-batch/b.txt /shared/cat-batch/a.txt", "B\nA\n"],
+  ["cat /shared/cat-batch/*.txt", "A\nB\n"],
+  ["cat missing /shared/cat-batch/a.txt", "cat: cannot open file\nA\n"], ['cat ""', "cat: invalid path\n"],
   ["cd /", ""],
 ];
 for (const [source, expected] of fileCases) {

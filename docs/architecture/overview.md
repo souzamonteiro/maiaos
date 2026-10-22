@@ -26,8 +26,7 @@ library: a MaiaCC-generated C++98 pattern frontend and bounded C89 matcher/walke
 It preserves quoting from the generated shell tree, expands before dispatch,
 and accesses only the existing authorized VFS directory imports. The host
 transports directory packets and stream bytes; pattern matching and enumeration
-remain in the guest. `ls` accepts multiple file/directory operands; `cat` remains
-single-file and read-only. These additions do not change the public host ABI,
+remain in the guest. `ls` accepts multiple file/directory operands; `cat` concatenates files sequentially and remains read-only. These additions do not change the public host ABI,
 capabilities, stream contract or rendering responsibilities.
 
 ## Execution options

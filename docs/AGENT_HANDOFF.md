@@ -2,6 +2,69 @@
 
 ## Current objective/result
 
+### Active next steps — owner-approved order (2026-10-21)
+
+Owner explicitly approved: multi-file cat; fix four legacy emitted-C diagnostics
+in the owning MaiaCpp; define output redirection write/permission/error contract;
+then implement pipelines with actual processes/streams. Do not change architecture
+or invent public APIs. Exact new host contracts must be reviewed before changes.
+No blanket publication/npm/version authorization is inferred from implementation.
+
+Multi-file cat is implemented locally and passed strict C89 build and functional
+regressions (see planning/SHELL_CAT_MULTIPLE_FILES.md): 38 unit tests, actual files/
+glob/directories/I/O/boot/LVGL/app regressions; one handle, exact bytes, continued
+errors, EOF and peer-close cancellation. Actual LVGL: 2049 flushes, 74557 kernel
+steps, shell18/I/O2 pages. User baseline main is now 9efca1d with published 1.6.1
+suite dependencies. Preserve the pre-existing dirty nested MaiaGlob/maiacpp pin
+(426947f -> 1a15d4c); the principal MaiaGlob itself is clean. Production shell
+build uses its own published MaiaOS/maiacpp, with committed MaiaGlob frontend and
+runtime sources. No generated parser or library code was patched. Next action:
+correct legacy printf declarations and void fallthrough emission in principal
+MaiaCpp, with regressions before regeneration/publication. Full shell parser
+parity was previously verified and EBNF is unchanged.
+
+
+### Completed local validation — 2026-10-22
+
+The first two requested slices are implemented and locally validated. Principal
+MaiaCpp fixes printf declarations, sanitized void fallthrough guards and C89
+late-declaration regions, preserving initializer order and generated AST identity.
+New regression compiler/tests/test-legacy-c89-output-contracts.js is in npm test.
+Four original native C++98 fixtures match emitted C89 and actual WASM. Two stale
+classes/casts reference outputs were corrected from independent original native
+C++98 execution; the new regression locks all four representations together.
+No input example checks were removed. Tracked example artifacts were regenerated
+for the owner's GitHub/mobile review policy.
+
+Principal MaiaCpp: npm test PASS; targeted contracts PASS; example build_all and
+run_all PASS 11/11. Full check:maiaCC-selfhost-wasm PASS: three stable generations,
+REx/XML/sample/WAT/shell XML plus C++/JavaScript byte parity, invalid-input checks,
+stack restoration and 24 actual memory growths. WAT frontend isolated timing was
+1671746 ms, status 0, 143711 XML characters. Correctness passed; substantial regex
+memo initialization costs remain a performance concern, not a proven recursion
+failure. Added phase timings for future bootstrap diagnostics. Exact result logs:
+/tmp/maiacpp-legacy-c89-final-suite.log, /tmp/maiacpp-legacy-examples-final.log,
+/tmp/maiacpp-legacy-selfhost.log. Principal MaiaCpp source/artifacts are unpublished;
+MaiaOS has not consumed the unpublished compiler through a local checkout.
+
+Owner approved publication/propagation and the presented redirection contract
+on 2026-10-22 ("Pode seguir"). MaiaCpp fd6730f, MaiaJS 58e5aff and MaiaGlob
+b82c0ce are published. MaiaJS test:full passed: 379 unit tests, 11 C++ and 11 JS
+examples, 48 course cases and distribution integration. MaiaGlob generation,
+sanitizers, 10638 native/WASM and 10621 frontend comparisons passed.
+MaiaOS consumed the published pins; strict C89 rebuild and shell files/glob/LVGL
+regressions passed: 2064 flushes, 74557 kernel steps, shell18/I/O2 pages.
+Redirection backing-store work has started locally outside this cat commit;
+the exact approved contract is planning/SHELL_OUTPUT_REDIRECTION.md. Pipelines require a further
+kernel-owned process lifecycle contract: current kernel.cpp has no process table
+or guest spawn/wait API, and the reference browser currently starts WASM instances.
+Do not implement pipelines by silently assigning kernel policy to host JavaScript.
+Next safe action: publish the authorized cat snapshot, then implement and
+validate redirection. No new version or npm release was performed. Current
+publication authorization covers the reviewed first two slices and propagation;
+redirection publication will require separate approval once code/tests are ready.
+
+
 ### Current publication — full MaiaOS shell integration authorized
 
 The owner explicitly accepted commit and push of the complete MaiaOS set after

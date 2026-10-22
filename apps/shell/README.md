@@ -1,6 +1,6 @@
 # MaiaOS Shell — implementation blueprint
 
-**Status:** bounded MVP with MaiaCC-generated C++98 lexing/parsing integrated in the WASM guest. The app guest supports `help`, `echo`, `pwd`, `ls`, `cd`, `cat <file>`, `clear`, and `exit`; it is not POSIX-conformant. The reference for comparison is POSIX.1-2017, Shell Grammar, sections 2.10.1 and 2.10.2.
+**Status:** bounded MVP with MaiaCC-generated C++98 lexing/parsing integrated in the WASM guest. The app guest supports `help`, `echo`, `pwd`, `ls`, `cd`, `cat <file> [file ...]`, `clear`, and `exit`; it is not POSIX-conformant. The reference for comparison is POSIX.1-2017, Shell Grammar, sections 2.10.1 and 2.10.2.
 
 ## Architecture
 
@@ -62,7 +62,7 @@ Only I/O requests `tty.input`; the host routes keys while the LVGL canvas has
 focus. Prompt, edited input and caret share a single live-line LVGL label.
 
 The command set is `help`, `echo`, `pwd`, `ls [path ...]`, `cd [path]`,
-`cat <file>`, `clear`, `exit`. `clear` emits the supported terminal clear/home escape sequence.
+`cat <file> [file ...]`, `clear`, `exit`. `clear` emits the supported terminal clear/home escape sequence.
 The additive `maia.vfs.opendir/readdir` imports supply bounded directory snapshots.
 MaiaGlob performs bounded `*`, `?` and bracket-class expansion in the guest,
 preserving quoted/escaped bytes. Each source word's matches are sorted by UTF-8
@@ -70,7 +70,7 @@ bytes; unmatched words remain literal. Expansion completes before command
 dispatch, with errors instead of partial execution when a limit is reached.
 `ls` accepts multiple file/directory operands and continues after an operand
 error; directory headings appear with multiple operands. Options remain unsupported.
-`cat` still accepts exactly one operand after expansion.
+`cat` reads the final expanded operands sequentially, with one file handle at a time.
 The shell owns its cwd; no host-global chdir is performed. Mutable directory
 operations, general spawning and descriptor transfer remain future work.
 The shell retains `maia_app_start`/`maiaos_step`; I/O uses
@@ -84,7 +84,7 @@ MaiaC/MaiaWASM; Emscripten builds only the separate platform LVGL module.
 | MaiaCC grammar | Structural subset; generated C++98 lexer/parser embedded in the runtime guest and checked against the JS oracle. |
 | Browser app catalog and LVGL | Implemented; I/O draws its window, output, editable line and caret using shell prompt bytes. |
 | Keyboard event syscalls | Implemented; printable keys, Enter, arrows, Home/End, Backspace, Delete, and one-line Up/Down history are handled by the C++98 I/O guest. |
-| Minimal command executor | Implemented and tested: `help`, `echo`, `pwd`, `ls`, `cd`, `cat <file>`, `clear`, `exit`. |
+| Minimal command executor | Implemented and tested: `help`, `echo`, `pwd`, `ls`, `cd`, `cat <file> [file ...]`, `clear`, `exit`. |
 | Browser host smoke | Existing MVP had interactive verification. This integration is tested through Node and the real LVGL-WASM callbacks; interactive browser verification was not rerun for this change. |
 | Directory navigation | Implemented: bounded `ls [path ...]`, `cd [path]`, real per-instance `pwd`; own-home isolation and escaped control bytes. |
 | Mutable filesystem commands | Not implemented; mkdir/unlink and write/redirection semantics need their own contracts/tests. |
@@ -261,7 +261,7 @@ navigation, exact path bounds, capability denial and malformed-packet cleanup.
 
 ## Read-only cat
 
-`cat <file>` now accepts one VFS-authorized absolute or cwd-relative path, including
+`cat <file> [file ...]` now accepts one or more VFS-authorized absolute or cwd-relative paths, including
 quotes, spaces and UTF-8 names. It uses the same logical path normalization as
 cd/ls, without changing cwd. No new host API, capability or status code is added.
 File open uses READ only, and file bytes are copied unchanged through existing

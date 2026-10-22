@@ -100,7 +100,7 @@ static void resumeExpansion(void)
             for (unsigned int i = 0; i < 1152; ++i) gCommandWords[i] = gExpandedWords[i];
             gExpansionActive = 0;
             if (gExpansionCount) executeCommand(gExpansionCount);
-            if (!gExitRequested && !gInputEOF && gCatHandle < 0 && !gLsActive) writeText(1, kPromptText);
+            if (!gExitRequested && !gInputEOF && gCatHandle < 0 && !gCatActive && !gLsActive) writeText(1, kPromptText);
             return;
         }
         const unsigned int offset = gExpansionIndex * kMaxWordBytes;

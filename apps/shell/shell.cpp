@@ -36,6 +36,9 @@ static unsigned int gTokenCount = 0;
 static int gInputOverflow = 0;
 static int gInputEOF = 0;
 static int gCatHandle = -1;
+static unsigned int gCatActive = 0;
+static unsigned int gCatCount = 0;
+static unsigned int gCatIndex = 0;
 static int gDirectoryHandle = -1;
 static unsigned int gLsActive = 0;
 static unsigned int gLsCount = 0;
@@ -119,7 +122,6 @@ static void resumeCat(void)
     if (count > 0) { writeBytes(1, reinterpret_cast<const char*>(gReadBuffer), static_cast<unsigned int>(count)); return; }
     maia_vfs_close(gCatHandle); gCatHandle = -1;
     if (count < 0) writeText(2, "cat: read failed\n");
-    if (!gInputEOF) writeText(1, kPromptText);
 }
 static int resolvePath(const char* path)
 {
@@ -163,6 +165,27 @@ static void runCat(const char* path)
         else writeText(2, "cat: cannot open file\n");
         gCatHandle = -1;
     }
+}
+static void runCatOperands(unsigned int wordCount)
+{
+    if (wordCount < 2) { writeText(2, "usage: cat <file> [file ...]\n"); return; }
+    for (unsigned int i = 1; i < wordCount; ++i) {
+        if (gCommandWords[i * kMaxWordBytes] == '-') {
+            writeText(2, "usage: cat <file> [file ...]\n"); return;
+        }
+    }
+    gCatCount = wordCount; gCatIndex = 1; gCatActive = 1;
+}
+static void resumeCatOperands(void)
+{
+    if (gCatIndex >= gCatCount) {
+        gCatActive = 0;
+        if (!gInputEOF) writeText(1, kPromptText);
+        return;
+    }
+    const char* path = gCommandWords + gCatIndex * kMaxWordBytes;
+    ++gCatIndex;
+    runCat(path);
 }
 static void directoryError(const char* command, int status)
 {
@@ -384,7 +407,7 @@ static int parseSimpleCommand(unsigned int* wordCount)
 
 static void printHelp(void)
 {
-    writeText(1, "Commands: help, echo, pwd, ls [path ...], cd [path], cat <file>, clear, exit\n");
+    writeText(1, "Commands: help, echo, pwd, ls [path ...], cd [path], cat <file> [file ...], clear, exit\n");
 }
 
 static void executeCommand(unsigned int wordCount)
@@ -406,9 +429,7 @@ static void executeCommand(unsigned int wordCount)
     } else if (textEquals(command, "cd")) {
         runDirectoryCommand(command, wordCount);
     } else if (textEquals(command, "cat")) {
-        const char* path = gCommandWords + kMaxWordBytes;
-        if (wordCount != 2 || path[0] == '-') writeText(2, "usage: cat <file>\n");
-        else runCat(path);
+        runCatOperands(wordCount);
     } else if (textEquals(command, "clear") && wordCount == 1) {
         writeText(1, "\033[2J\033[H");
     } else if (textEquals(command, "exit") && wordCount == 1) {
@@ -486,6 +507,7 @@ extern "C" __attribute__((visibility("default"))) void maiaos_step(void)
         if (gExitRequested) { finish(); return; }
         if (gExpansionActive) { resumeExpansion(); continue; }
         if (gCatHandle >= 0) { resumeCat(); continue; }
+        if (gCatActive) { resumeCatOperands(); continue; }
         if (gDirectoryHandle >= 0) { resumeListing(); continue; }
         if (gLsActive) { resumeLs(); continue; }
         if (gInputEOF) { gExitRequested = 1; continue; }
