@@ -2,6 +2,113 @@
 
 ## Current objective/result
 
+### Publication checkpoint — 2026-10-22
+
+The owner explicitly authorized commit/push of the complete validated pipeline
+slice, including the approved contract and kernel.wasm/kernel.js/cat.wasm/
+shell.wasm artifacts. This supersedes the publication exclusions in the earlier
+local-validation notes below. This commit records that tested snapshot in MaiaOS
+only; compiler/library sources and gitlinks are unchanged. No new version, npm
+package or history rewrite. Generated runtime artifacts are explicitly versioned
+for GitHub/mobile review alongside their sources and reproducible build commands;
+no caches or temporary test output are included.
+
+All functional checks recorded below already passed on this snapshot. Publication
+changes only this status documentation; no duplicate full-suite run is needed.
+Baseline before the pipeline commit: main/origin 4783c5d. After commit/push verify
+origin/main matches HEAD and the working tree is clean. The next feature contract
+remains pipeline+redirection composition or general programs; neither is silently
+added by publication. Browser-interactive/device validation remains separate.
+
+
+### Latest checkpoint — 2026-10-22, pipeline implementation validated locally
+
+Owner explicitly authorized the tested redirection commit/push and the concrete
+pipeline contract implementation, excluding pipeline commit/push/npm/versions.
+Redirection is now published as main/origin 4783c5d. An initial combined publish
+command was rejected by automatic review because it included the unapproved
+pipeline proposal file; that command did not run. The safe scoped redirection
+commit excluded that file and pushed successfully. No pipeline source/artifact
+or contract has been committed/pushed. No version/npm/history change.
+
+The approved pipeline slice is implemented in MaiaOS only. Kernel C++98 owns
+16 process slots, four group slots, boot PIDs, resource/identity validation,
+reserving <=128 worker pages, deferred startup, round-robin scheduling, exit
+aggregation, rollback and reaping. Trusted host classes only move bounded binary
+packets, instantiate the kernel-selected package and apply kernel stream actions.
+Browser boot no longer allocates PIDs or chooses runnable policy in JavaScript.
+I/O owns the unchanged real LVGL terminal/events. Kernel halt tears down its host
+instances; stale asynchronous starts cannot enter a replacement kernel.
+
+The generated shell Pipeline/SimpleCommand AST drives quote-aware MaiaGlob
+expansion before submitting a plan. Two-to-four independent cat.wasm workers get
+immutable copied argv, private memories/handles and explicitly authorized caller
+VFS identity. The first cat requires files; later operand-free cat consumes stdin.
+Only cat is whitelisted. At most 12 total expanded words, <=95 bytes each including
+normalized absolute file paths; reject over-limit paths before launch. Pipeline
+redirection composition, general exec/jobs/options/other stages remain unsupported.
+Existing simple-command > / >> and all builtins remain functional.
+
+Implementation paths: apps/kernel/processes.hpp + kernel.cpp/kernel.json;
+apps/cat/{cat.cpp,manifest.json,cat.wasm,README.md}; apps/shell/shell-pipeline.hpp,
+shell.cpp/shell-glob.hpp/manifest/shell.wasm; runtime/maia-kernel-processes.js,
+maia-pipeline-transport.js, host-imports/capabilities/streams; browser main.js;
+new build/test scripts, updated old fixtures, package test entries and docs.
+Kernel POD lowering declares existing env.__malloc/__free bridges; kernel
+manifest explicitly requests memory.alloc/free. The fixed cat package profile
+is read-only and its manifest cannot silently exceed kernel-reserved resources.
+Builtin-only fixtures fail if their unused pipeline imports are invoked; dedicated
+suites use actual kernel, workers, production boot functions and real I/O/LVGL.
+
+Verification PASS (final functional sources):
+- npm run build:kernel -- --check-c89: own published MaiaCpp -> strict Clang C89 ->
+  MaiaC -> kernel.wasm, 38644 bytes, two initial pages.
+- npm run build:cat -- --check-c89: actual worker WASM, 4240 bytes, two pages.
+- npm run build:shell -- --check-c89: actual shell WASM, 1266970 bytes, 18 pages.
+- npm test: 50 passed, 0 failed.
+- test:kernel-processes-native: native C++98 ASan/UBSan, 4096 malformed packets
+  and 100 group lifecycles, no sanitizer errors.
+- test:kernel-processes: actual WASM policy, 100 group cycles, malformed packets,
+  wait ownership/bounds, failed launch/trap/parent cancellation, completed orphan
+  reaping/full quota reuse and stale boot acknowledgments after slot reuse.
+- test:pipeline-workers: four distinct actual worker memories, 256KiB binary
+  transfer through 31-byte pipes, private delegation/foreign denial, literal
+  metacharacters, empty files/EOF, downstream early close, 50 repetitions,
+  failed second launch, trap and parent cancellation during an in-flight start.
+- test:shell-pipelines: production browser boot/scheduler functions, actual kernel,
+  generated shell AST/MaiaGlob, workers, io.wasm and real LVGL with 31-byte pipes;
+  relative/quoted/glob/private paths, four stages, 25 repetitions, unsupported-form
+  atomicity, rejection/recovery of a worker manifest exceeding its read-only
+  profile, existing redirection, kernel shutdown with pending worker startup,
+  zero surviving instances/windows/files/endpoints. Last run: 33 actual flushes.
+- test:shell-boot: 25 sessions + failed startup and import trap cleanup while
+  keeping the real kernel alive; final full teardown remains empty.
+- test:shell-files/glob/directories/redirection/lvgl, test:io-streams and
+  test:lvgl-host PASS. Calculator/Clock/kernel UI remain functional.
+- test:shell-equivalence: all 5356 JS/native C++98/WASM inputs exactly match tokens,
+  UTF-16 offsets and full trees; guest stack restored. EBNF/generated files unchanged.
+- git diff --check PASS.
+Logs: /tmp/maiaos-pipeline-{kernel-build,kernel-tests,native,workers,unit,boot,
+final-regressions,gui-apps,streams,parity}.log and /tmp/maiaos-shell-pipelines.log.
+
+One boot-ack identity bug found during development caused repeated actions and
+host test OOM; corrected by separating action recipient from the stable boot
+owner PID. Bounded test iteration guards and stale-slot tests now lock this down.
+All final tests above passed after the correction; do not cite the failed run as
+current. Existing kernel.wasm/kernel.js outputs live under ignored generated/;
+future authorized publication must explicitly include those reproducible artifacts
+for the owner's mobile/GitHub inspection, alongside cat.wasm and shell.wasm.
+No cache/temp build files should be committed. All owning compiler/library
+repositories and consumed gitlinks remain unchanged by this MaiaOS-only slice.
+
+Next safe action: obtain explicit publication authorization for this fully tested
+pipeline set, including its contract and generated runtime artifacts. No further
+architecture approval is needed for the implementation already authorized. A
+subsequent extension (general programs or pipeline+redirection) needs a concrete
+separate contract. Interactive in-app browser and physical-device tests were not
+run; Node native-WASM with actual LVGL is the reference integration evidence.
+
+
 ### Current checkpoint — 2026-10-22, stdout redirection complete locally
 
 The owner said "Pode seguir" after both publication and precise redirection

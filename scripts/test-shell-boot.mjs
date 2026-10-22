@@ -6,7 +6,9 @@ import vm from "node:vm";
 import { createMaiaHostImports, MAIA_EVENT_KEY, MAIA_KEY_ENTER, MAIA_KEY_TEXT } from "../runtime/maia-host-imports.js";
 import { instantiateNativeWasm } from "../runtime/native-wasm.js";
 import { assertManifestCapabilities } from "../runtime/maia-capabilities.js";
-import { MaiaStreamBroker, bindShellStreams } from "../runtime/maia-streams.js";
+import { MaiaStreamBroker } from "../runtime/maia-streams.js";
+import { KernelProcessController } from "../runtime/maia-kernel-processes.js";
+import { KernelPipelineTransport } from "../runtime/maia-pipeline-transport.js";
 import { MaiaVfsStore } from "../runtime/maia-vfs-store.js";
 import { MemoryVfsAdapter } from "../runtime/maia-vfs.js";
 import { createLvglGraphicsCallbacks } from "../platform/desktop-web/lvgl-bridge.js";
@@ -27,14 +29,18 @@ const ioManifest = JSON.parse(await readFile(new URL("../apps/io/manifest.json",
 const shellManifest = JSON.parse(await readFile(new URL("../apps/shell/manifest.json", import.meta.url), "utf8"));
 const ioBytes = await readFile(new URL("../apps/io/io.wasm", import.meta.url));
 const shellBytes = await readFile(new URL("../apps/shell/shell.wasm", import.meta.url));
+const kernelManifest=JSON.parse(await readFile(new URL("../apps/kernel/kernel.json",import.meta.url),"utf8"));
+const kernelBytes=await readFile(new URL("../platform/desktop-web/generated/kernel.wasm",import.meta.url));
 let failIo = false;
 const adapters = [];
 const context = vm.createContext({
   WebAssembly, URL, Uint8Array, Number, TypeError, RangeError, Error, console,
   sharedVfsStore: new MaiaVfsStore(),
-  nextProcessId: 1, runningProcesses, buttonOwners: new Map(), streamBroker: broker,
-  graphicsCallbacks, createMaiaHostImports, instantiateNativeWasm, assertManifestCapabilities, bindShellStreams,
-  BROWSER_HOST_GRANTS: [...new Set([...ioManifest.capabilities, ...shellManifest.capabilities])],
+  kernelController:null, pipelineTransport:null, kernelProcess:null, catPackage:null,
+  KernelProcessController, KernelPipelineTransport,
+  runningProcesses, buttonOwners: new Map(), streamBroker: broker,
+  graphicsCallbacks, createMaiaHostImports, instantiateNativeWasm, assertManifestCapabilities,
+  BROWSER_HOST_GRANTS: [...new Set([...ioManifest.capabilities, ...shellManifest.capabilities,...kernelManifest.capabilities,"process.args"])],
   window: {location: {href: "http://localhost:8080/"}},
   document: {getElementById: () => ({textContent: ""})},
   // Storage callback fixture: actual boot code applies limits and owns lifecycle.
@@ -53,7 +59,10 @@ vm.runInContext(extract("function processGraphics(", "function routeLvglEvent(")
   + extract("async function createAppVfs(", "async function launchSelectedApp("), context);
 const options = {manifest: shellManifest, bytes: shellBytes,
   entryName: shellManifest.entryExport, stepName: shellManifest.stepExport};
-const empty = () => {assert.equal(runningProcesses.size, 0); assert.equal(liveWindows.size, 0);
+const core=await context.startProcess({manifest:kernelManifest,bytes:kernelBytes,role:"kernel",entryName:kernelManifest.entryExport,stepName:kernelManifest.stepExport});
+context.kernelProcess=core;
+// Session teardown leaves the intentionally persistent, real kernel running.
+const empty = () => {assert.equal(runningProcesses.size, 1);assert.ok(runningProcesses.has(core));assert.ok(core.running);assert.equal(liveWindows.size, 1);
   assert.equal(broker.stats.pipes, 0); assert.equal(broker.stats.endpoints, 0);
   assert.ok(adapters.every(adapter => adapter.openHandleCount === 0));};
 await assert.rejects(context.startApplication({...options, bytes: new Uint8Array([0])}), /WebAssembly/); empty();
@@ -65,12 +74,12 @@ for (let session = 0; session < 25; ++session) {
   const io = [...runningProcesses].find(process => process.role === "service");
   assert.ok(io.acceptsKeyboardInput); assert.equal(shell.acceptsKeyboardInput, false);
   assert.equal(io.vfs.maxOpenFiles, 0); assert.equal(shell.vfs.maxOpenFiles, 4);
-  assert.equal(runningProcesses.size, 2); assert.equal(liveWindows.size, 1);
+  assert.equal(runningProcesses.size, 3); assert.equal(liveWindows.size, 2);
   for (const character of "exit") io.host.enqueueEvent({type: MAIA_EVENT_KEY, objectHandle: 0, data0: character.charCodeAt(0), data1: MAIA_KEY_TEXT});
   io.host.enqueueEvent({type: MAIA_EVENT_KEY, objectHandle: 0, data1: MAIA_KEY_ENTER});
   for (let tick = 0; tick < 12; ++tick) {
     lvgl._maiaos_lvgl_tick();
-    for (const process of [...runningProcesses]) if (process.running) process.runtime.exports[process.stepExport]();
+    context.stepKernelProcesses();
   }
   empty();
 }
@@ -86,7 +95,7 @@ for (let session = 0; session < 25; ++session) {
   assert.equal(process.vfs.openHandleCount, 0);
   for (let tick = 0; tick < 12; ++tick) {
     lvgl._maiaos_lvgl_tick();
-    for (const item of [...runningProcesses]) item.runtime.exports[item.stepExport]();
+    context.stepKernelProcesses();
   }
   empty();
 }
@@ -102,7 +111,7 @@ for (let session = 0; session < 25; ++session) {
   context.stopProcess(process, 1); assert.equal(process.vfs.openHandleCount, 0);
   for (let tick = 0; tick < 12; ++tick) {
     lvgl._maiaos_lvgl_tick();
-    for (const item of [...runningProcesses]) item.runtime.exports[item.stepExport]();
+    context.stepKernelProcesses();
   }
   empty();
 }
@@ -118,7 +127,7 @@ for (let session = 0; session < 25; ++session) {
   context.stopProcess(process, 1); assert.equal(process.vfs.openHandleCount, 0);
   for (let tick = 0; tick < 12; ++tick) {
     lvgl._maiaos_lvgl_tick();
-    for (const item of [...runningProcesses]) item.runtime.exports[item.stepExport]();
+    context.stepKernelProcesses();
   }
   empty();
 }
@@ -126,5 +135,6 @@ assert.equal((await context.createAppVfs("limit.test", 100)).maxOpenFiles, 16);
 await assert.rejects(context.createAppVfs("limit.test", -1), /Invalid open-file limit/);
 await assert.rejects(context.createAppVfs("limit.test", 1.5), /Invalid open-file limit/);
 assert.equal(context.window.location.href, "http://localhost:8080/");
+context.stopProcess(core,0);assert.equal(runningProcesses.size,0);assert.equal(liveWindows.size,0);
 assert.ok(flushes > 0);
 console.log(`Actual boot functions passed: failed I/O/shell startup cleanup, keyboard ownership, 25 real LVGL session launches/exits, directory/file-trap cleanup, manifest quotas, unchanged URL, zero surviving windows/endpoints (${flushes} flushes).`);

@@ -14,6 +14,8 @@ MAIA_IMPORT("maia.vfs", "read") int32_t maia_vfs_read(int32_t handle, int32_t po
 MAIA_IMPORT("maia.vfs", "opendir") int32_t maia_vfs_opendir(int32_t pointer, int32_t length);
 MAIA_IMPORT("maia.vfs", "readdir") int32_t maia_vfs_readdir(int32_t handle, int32_t pointer, int32_t capacity);
 MAIA_IMPORT("maia.vfs", "close") int32_t maia_vfs_close(int32_t handle);
+MAIA_IMPORT("maia.process", "pipeline_start") int32_t maia_pipeline_start(int32_t pointer,int32_t length);
+MAIA_IMPORT("maia.process", "pipeline_wait") int32_t maia_pipeline_wait(int32_t group,int32_t pointer,int32_t capacity);
 MAIA_IMPORT("maia.process", "exit") void maia_process_exit(int32_t status);
 }
 static const int32_t kVfsRead = 1;
@@ -27,6 +29,10 @@ static char gLine[256];
 static MaiaCCParserToken gTokens[32];
 static MaiaShellParseTreeNode gParseNodes[1024];
 static char gCommandWords[1152];
+static unsigned int gWordStage[12],gExpandedStage[12],gPipelineNodeIds[4];
+static unsigned int gPipelineStageCount=0;
+static int gPipelineGroup=0;
+static uint8_t gPipelinePlan[1536],gPipelineResult[48];
 static uint8_t gReadBuffer[128];
 static char gOutputBuffer[263];
 static uint8_t gInputBuffer[256];
@@ -294,6 +300,7 @@ static int beginCommandOutput(const char* path)
     }
     return 1;
 }
+#include "shell-pipeline.hpp"
 #include "shell-glob.hpp"
 
 static void abortCommandOutput(void)
@@ -386,15 +393,22 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
     *wordCount = 0;
     unsigned int simpleCommands = 0;
     unsigned int redirections = 0;
+    unsigned int pipelines = 0;
+    gPipelineStageCount = 0;
     gRedirectFlags = 0;
     for (unsigned int index = 0; index < tree->nodeCount; ++index) {
         const MaiaShellParseTreeNode* node = tree->nodes + index;
         if (node->kind != kShellParseTreeNonterminal) continue;
-        if (textEquals(node->name, "SimpleCommand")) ++simpleCommands;
+        if (textEquals(node->name, "SimpleCommand")) {
+            if(simpleCommands<4)gPipelineNodeIds[simpleCommands]=index;
+            ++simpleCommands;
+        }
+        if (textEquals(node->name,"Pipeline"))++pipelines;
         if (textEquals(node->name, "Assignment")) return 2;
         if (textEquals(node->name, "Redirection")) ++redirections;
     }
-    if (simpleCommands > 1 || redirections > 1) return 2;
+    if (simpleCommands > 4 || redirections > 1 || (simpleCommands>1 && (redirections || pipelines!=1))) return 2;
+    gPipelineStageCount=simpleCommands;
     // Decode argv first, then the redirect target, regardless of source position.
     for (unsigned int pass = 0; pass < 2; ++pass) {
     for (unsigned int index = 0; index < tree->nodeCount; ++index) {
@@ -407,6 +421,8 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
             if (textEquals(ancestor->name, "Redirection")) redirected = 1;
             parent = ancestor->parent;
         }
+        if(simpleCommands>1 && node->parent>=0 && textEquals(tree->nodes[node->parent].name,"Pipeline")
+            && node->length==1 && node->value[0]=='|')continue;
         if ((pass == 0 && redirected) || (pass == 1 && !redirected)) continue;
         if (redirected && node->token != MAIACC_TOKEN_WORD) {
             if (node->parent < 0 || !textEquals(tree->nodes[node->parent].name, "RedirectionOperator")) return 2;
@@ -421,6 +437,12 @@ static int buildCommandWords(const MaiaShellParseTreeCollector* tree, unsigned i
             && node->token != MAIACC_TOKEN_IO_NUMBER) return 2;
         if (*wordCount >= kMaxArgs) return 3;
 
+        int commandParent=node->parent;
+        while(commandParent>=0 && !textEquals(tree->nodes[commandParent].name,"SimpleCommand"))commandParent=tree->nodes[commandParent].parent;
+        unsigned int stage=0;
+        while(stage<simpleCommands && gPipelineNodeIds[stage]!=static_cast<unsigned int>(commandParent))++stage;
+        if(stage>=simpleCommands)return 2;
+        gWordStage[*wordCount]=stage;
         char* word = gCommandWords + (*wordCount * kMaxWordBytes);
         unsigned char* protectedBytes = gWordProtected + (*wordCount * kMaxWordBytes);
         unsigned int outputLength = 0;
@@ -577,6 +599,7 @@ extern "C" __attribute__((visibility("default"))) void maiaos_step(void)
             continue;
         }
         if (gExitRequested) { finish(); return; }
+        if (gPipelineGroup>0) { resumePipeline(); if(gPipelineGroup>0)return; continue; }
         if (gExpansionActive) { resumeExpansion(); continue; }
         if (gCatHandle >= 0) { resumeCat(); continue; }
         if (gCatActive) { resumeCatOperands(); continue; }

@@ -20,7 +20,7 @@ async function shell({files={},capacity=31}={}) {
   const vfs=new MemoryVfsAdapter({appId:manifest.id,maxOpenFiles:manifest.limits.openFiles,files});
   vfs.write=()=>{throw new Error('cat must never write VFS files');};
   let exit=null,steps=0;
-  const host=createMaiaHostImports({vfs,graphics,streams:broker,processId:3,onProcessExit:code=>{exit=code;}});
+  const host=createMaiaHostImports({vfs,graphics,pipeline:{start(){throw new Error("Unexpected pipeline in builtin-only regression");},wait(){throw new Error("Unexpected pipeline wait");}},streams:broker,processId:3,onProcessExit:code=>{exit=code;}});
   const instance=await WebAssembly.instantiate(module,host.imports);host.attachInstance(instance);
   instance.exports.maia_app_start();
   const stack=instance.exports.__stack_ptr.value, memory=instance.exports.memory.buffer.byteLength;

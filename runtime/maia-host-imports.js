@@ -64,6 +64,8 @@ export function createMaiaHostImports({
   tty = null,
   streams = null,
   processId = null,
+  pipeline = null,
+  processArgs = null,
   log = () => {},
   monotonicMs = () => globalThis.performance.now(),
   onProcessExit = () => {},
@@ -311,6 +313,33 @@ export function createMaiaHostImports({
         tty.write(stream, message);
         return length;
       },
+    };
+  }
+
+  if (pipeline) {
+    if (typeof pipeline.start !== "function" || typeof pipeline.wait !== "function") throw new TypeError("Invalid kernel pipeline transport");
+    imports["maia.process"].pipeline_start = (pointer,length) => {
+      if (!Number.isInteger(length) || length<16 || length>1536) return STATUS.INVALID_ARGUMENT;
+      try {validateGuestRange(guestMemory,pointer,length);} catch {return STATUS.INVALID_ARGUMENT;}
+      return pipeline.start(new Uint8Array(guestMemory.buffer,pointer,length).slice());
+    };
+    imports["maia.process"].pipeline_wait = (group,pointer,capacity) => {
+      if (!Number.isInteger(capacity) || capacity<16 || capacity>48) return STATUS.INVALID_ARGUMENT;
+      try {validateGuestRange(guestMemory,pointer,capacity);} catch {return STATUS.INVALID_ARGUMENT;}
+      const result=pipeline.wait(group,capacity);if(typeof result==='number')return result;
+      if (!(result instanceof Uint8Array) || result.length>capacity) throw new Error("Invalid kernel completion packet");
+      new Uint8Array(guestMemory.buffer,pointer,result.length).set(result);return result.length;
+    };
+  }
+  if (processArgs) {
+    if (!(processArgs instanceof Uint8Array) || processArgs.length>1536) throw new TypeError("Invalid process argv packet");
+    const immutableArgs=processArgs.slice();
+    imports["maia.process"].args_size = () => immutableArgs.length;
+    imports["maia.process"].args_copy = (pointer,capacity) => {
+      if (!Number.isInteger(capacity) || capacity<0 || capacity>1536) return STATUS.INVALID_ARGUMENT;
+      try {validateGuestRange(guestMemory,pointer,capacity);} catch {return STATUS.INVALID_ARGUMENT;}
+      if(capacity<immutableArgs.length)return STATUS.OUT_OF_MEMORY;
+      new Uint8Array(guestMemory.buffer,pointer,immutableArgs.length).set(immutableArgs);return immutableArgs.length;
     };
   }
 

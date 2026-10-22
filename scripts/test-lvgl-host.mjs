@@ -64,6 +64,8 @@ assert.deepEqual(
     "maia.gfx.label_create",
     "maia.gfx.label_set_text",
     "maia.gfx.window_create",
+    "env.__free",
+    "env.__malloc",
     "maia.events.poll",
     "maia.log.write",
     "maia.vfs.close",

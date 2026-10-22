@@ -309,3 +309,27 @@ unsupported. Kernel scheduling and I/O-owned LVGL rendering are unchanged.
 Checks: strict `build:shell -- --check-c89`, `npm test`, `test:shell-redirection`,
 `test:shell-files`, `test:shell-glob`, `test:shell-directories`, `test:shell-boot`,
 `test:shell-lvgl`, `test:io-streams`, `test:lvgl-host` and frontend equivalence.
+
+
+## Initial kernel-owned pipeline ABI (2026-10-22)
+
+The owner-approved additive application imports are
+`maia.process.pipeline_start(i32 plan_ptr,i32 plan_len)->i32` and
+`maia.process.pipeline_wait(i32 group,i32 out_ptr,i32 capacity)->i32`, gated by
+process.pipeline. Workers receive `maia.process.args_size()->i32` and
+`maia.process.args_copy(i32 ptr,i32 capacity)->i32`, gated by process.args.
+All guest buffers are fully checked before submitting or consuming completion.
+The [approved process contract](../planning/SHELL_PIPELINE_PROCESS_CONTRACT.md)
+fixes packet layouts, existing negative errors, quotas, identities and trusted
+kernel export/action signatures. No native pointers or shell source strings cross
+process boundaries.
+
+The reference implementation initially supports two-to-four-stage cat groups,
+at most 12 words/95 UTF-8 bytes each/1536 plan bytes, <=4096-byte pipe edges, <=4
+open files per worker, <=32 reserved pages per worker/128 per all worker groups,
+16 total process slots and four group slots. Effective worker VFS identity is
+explicitly delegated from the caller; package identity and private handles remain
+separate. General spawn/exec/dup, job control, input redirection and composing
+pipeline with redirection remain unsupported. Kernel-owned scheduling runs the
+existing kernel GUI plus approved guest steps; native-reference tests do not
+claim preemption/fuel or device timing.

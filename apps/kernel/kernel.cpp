@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "processes.hpp"
 
 #if !defined(__wasm__)
 #error "The MaiaOS kernel guest must be compiled to WebAssembly."

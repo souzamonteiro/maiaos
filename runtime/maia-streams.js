@@ -46,14 +46,29 @@ export class MaiaStreamBroker {
 
   // Host-only descriptor aliasing, e.g. stdout/stderr sharing one terminal.
   alias(processId, sourceHandle, targetHandle) {
-    const endpoint = this.endpoint(processId, sourceHandle);
-    if (!endpoint || !validInteger(targetHandle)) throw new TypeError('Invalid stream alias');
-    const table = this.processes.get(processId);
-    if (table.has(targetHandle)) throw new Error('Stream handle already bound');
-    if (table.size >= this.maxEndpoints) throw new Error('Stream endpoint quota exceeded');
-    table.set(targetHandle, endpoint);
-    if (endpoint.direction === 'read') ++endpoint.pipe.readers;
-    else ++endpoint.pipe.writers;
+    this.delegate(processId, sourceHandle, processId, targetHandle);
+  }
+
+  // Privileged kernel-action transport, never a guest descriptor transfer API.
+  delegate(sourcePid, sourceHandle, targetPid, targetHandle) {
+    const endpoint = this.endpoint(sourcePid, sourceHandle);
+    if (!endpoint || !validInteger(targetPid,1) || !validInteger(targetHandle)) throw new TypeError('Invalid stream delegation');
+    let table = this.processes.get(targetPid);
+    if (table?.has(targetHandle)) throw new Error('Stream handle already bound');
+    if ((table?.size ?? 0) >= this.maxEndpoints) throw new Error('Stream endpoint quota exceeded');
+    if (!table) {table=new Map();this.processes.set(targetPid,table);}
+    table.set(targetHandle,endpoint);
+    if(endpoint.direction==='read')++endpoint.pipe.readers;else ++endpoint.pipe.writers;
+  }
+
+  connectEof(reader, capacity=STREAM_MAX_COPY) {
+    if (!reader || !validInteger(reader.processId,1) || !validInteger(reader.handle)
+        || !validInteger(capacity,1) || capacity>STREAM_MAX_COPY) throw new TypeError('Invalid EOF endpoint');
+    let table=this.processes.get(reader.processId);
+    if(table?.has(reader.handle) || (table?.size??0)>=this.maxEndpoints || this.pipes.size>=this.maxPipes) throw new Error('Stream endpoint quota exceeded');
+    const pipe={bytes:new Uint8Array(capacity),head:0,count:0,readerOpen:true,writerOpen:false,readers:1,writers:0};
+    if(!table){table=new Map();this.processes.set(reader.processId,table);}
+    this.pipes.add(pipe);table.set(reader.handle,{pipe,direction:'read'});
   }
 
   read(processId, handle, count) {

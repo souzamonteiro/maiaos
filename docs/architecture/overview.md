@@ -45,3 +45,15 @@ owns LVGL; host JavaScript does not execute commands. See
 ## Core vs. OS
 
 ESP-IDF/FreeRTOS owns hardware interrupts and native tasks. MaiaOS is a sandboxed application environment rather than a bare-metal general-purpose kernel. No assumption of MMU or process address-space isolation.
+
+
+## Kernel-owned pipeline process slice
+
+The C++98 kernel now owns boot IDs, a bounded 16-slot process table, group
+reservations, round-robin runnable selection, launch actions, exit aggregation,
+rollback and reaping. The reference host stores instances and transports kernel
+packets; its runningProcesses set is not the process policy. The shell submits
+expanded generated-AST cat pipelines, and separate cat.wasm workers receive
+immutable argv and explicitly delegated caller VFS identity. Real I/O/LVGL stays
+separate from command execution. General exec/jobs and pipeline redirection are
+outside this first slice. See [the approved lifecycle/packet contract](../planning/SHELL_PIPELINE_PROCESS_CONTRACT.md).

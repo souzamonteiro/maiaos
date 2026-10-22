@@ -89,7 +89,8 @@ MaiaC/MaiaWASM; Emscripten builds only the separate platform LVGL module.
 | Directory navigation | Implemented: bounded `ls [path ...]`, `cd [path]`, real per-instance `pwd`; own-home isolation and escaped control bytes. |
 | Mutable filesystem commands | Not implemented; mkdir/unlink remain future work; stdout file redirection follows the approved bounded VFS contract. |
 | Filename expansion | MaiaGlob guest compiler/walker, quote masks, per-word byte sorting and atomic argv limits; see the consumer plan and its current validation status. |
-| Pipelines, input/descriptor redirection, other expansions, jobs, and POSIX conformance | Future work; not required for this MVP. |
+| Pipelines | Initial cat-only groups use the kernel process table, separate WASM workers and bounded pipes; see the implemented contract below. |
+| Input/descriptor redirection, other expansions, jobs and POSIX conformance | Future work. |
 
 The current reference vertical slice is **kernel + I/O service + shell app + real LVGL callbacks**, with bounded copied-byte streams. Device firmware/MaiaWASMVM integration is still pending.
 
@@ -352,3 +353,28 @@ redirects, pipelines and compound execution are rejected before dispatch.
 Build: `npm run build:shell -- --check-c89`. Validate with
 `npm run test:shell-redirection`, `npm test` and `npm run test:shell-lvgl`.
 See the [approved contract](../../docs/planning/SHELL_OUTPUT_REDIRECTION.md).
+
+
+## Kernel-owned cat pipelines
+
+Examples: `cat /system/welcome.txt | cat` and
+`cat /shared/a /shared/b | cat | cat | cat`. The generated Pipeline tree drives
+execution; quote-preserving MaiaGlob expansion happens before the kernel request.
+Two to four separate cat.wasm instances copy bytes through bounded streams. Kernel
+C++98 allocates PIDs, reserves resources, schedules guests, tracks exits, rolls
+back failed launches and reaps groups. The browser instantiates selected packages
+and copies data under those decisions. I/O continues to own the actual LVGL UI.
+
+The first stage requires file operands. Later operand-free cat reads stdin. File
+arguments resolve against shell cwd and must fit the 95-byte canonical wire word.
+Groups retain at most 12 expanded words total. Worker VFS handles/memories are
+private; the kernel-approved effective namespace is the caller shell's own home
+plus shared/read-only mounts. Foreign homes remain denied. No options, general
+exec, job control, pipeline+redirection composition or arbitrary program stages
+are added; unsupported forms are rejected before child creation.
+
+Build `npm run build:kernel -- --check-c89`, `npm run build:cat -- --check-c89`
+and `npm run build:shell -- --check-c89`. Run `npm run test:shell-pipelines`,
+`npm run test:pipeline-workers`, `npm run test:kernel-processes` and
+`npm run test:kernel-processes-native`. See the
+[approved pipeline contract](../../docs/planning/SHELL_PIPELINE_PROCESS_CONTRACT.md).

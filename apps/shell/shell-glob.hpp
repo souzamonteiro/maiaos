@@ -71,7 +71,7 @@ static int appendExpanded(const char* text, unsigned int length)
     if (gExpansionCount >= kMaxArgs || length >= kMaxWordBytes) return 0;
     char* output = gExpandedWords + gExpansionCount * kMaxWordBytes;
     for (unsigned int i = 0; i < length; ++i) output[i] = text[i];
-    output[length] = 0; ++gExpansionCount; return 1;
+    output[length] = 0; gExpandedStage[gExpansionCount]=gWordStage[gExpansionIndex]; ++gExpansionCount; return 1;
 }
 static int wordAfter(const char* left, const char* right)
 {
@@ -101,6 +101,7 @@ static void resumeExpansion(void)
         if (gExpansionIndex == gExpansionInputCount) {
             for (unsigned int i = 0; i < 1152; ++i) gCommandWords[i] = gExpandedWords[i];
             gExpansionActive = 0;
+            if(gPipelineStageCount>1){beginPipeline(gExpansionCount);return;}
             unsigned int count = gExpansionCount;
             if (gRedirectFlags) {
                 if (count - gExpansionTargetStart != 1) { endExpansion(-100); return; }

@@ -16,6 +16,7 @@
     "vfs.write",
     "vfs.close",
     "process.exit",
+    "process.pipeline",
     "stream.read",
     "stream.write",
     "stream.close",

@@ -23,7 +23,9 @@ import {
   createLvglGraphicsCallbacks,
   presentLvglRgb565,
 } from "/platform/desktop-web/lvgl-bridge.js";
-import { MaiaStreamBroker, bindShellStreams } from "/runtime/maia-streams.js";
+import { KernelProcessController } from "/runtime/maia-kernel-processes.js";
+import { KernelPipelineTransport } from "/runtime/maia-pipeline-transport.js";
+import { MaiaStreamBroker } from "/runtime/maia-streams.js";
 
 import { MaiaVfsStore } from "/runtime/maia-vfs-store.js";
 
@@ -47,6 +49,8 @@ const BROWSER_HOST_GRANTS = [
   "vfs.readdir",
   "tty.input",
   "process.exit",
+  "process.pipeline",
+  "process.args",
   "time.monotonic",
   "stream.read",
   "stream.write",
@@ -58,7 +62,9 @@ const buttonOwners = new Map();
 let lvglModule = null;
 let graphicsCallbacks = null;
 let kernelProcess = null;
-let nextProcessId = 1;
+let kernelController = null;
+let pipelineTransport = null;
+let catPackage = null;
 
 function setSimulatorState(state, text) {
   document.body.dataset.state = state;
@@ -179,13 +185,19 @@ function routeLvglEvent(handle) {
   }
 }
 
-function stopProcess(process, exitCode) {
+function stopProcess(process, exitCode, trapped = false) {
   if (!process || process.stopped) return;
   process.stopped = true;
   process.running = false;
   runningProcesses.delete(process);
   process.host?.closeStreams();
   process.host?.closeFiles();
+  process.controller?.exit(process.pid, exitCode, trapped);
+  if (process.role === "kernel") {
+    // A dead kernel cannot schedule or authorize surviving platform instances.
+    for (const child of [...runningProcesses]) stopProcess(child, exitCode, true);
+    kernelController = null; pipelineTransport = null;
+  }
   for (const [handle, owner] of buttonOwners) {
     if (owner === process) buttonOwners.delete(handle);
   }
@@ -229,13 +241,21 @@ async function createAppVfs(appId, requestedLimit = 16) {
   }
 }
 
-async function startProcess({ manifest, bytes, role, entryName, stepName, pid = nextProcessId++ }) {
+async function startProcess({ manifest, bytes, role, entryName, stepName, pid = null, effectiveAppId = manifest.id, processArgs = null, deferEntry = false }) {
+  const ownerKernel = kernelController;
+  if (role !== "kernel" && !ownerKernel) throw new Error("Start the kernel before applications");
   const module = await WebAssembly.compile(bytes);
   assertManifestCapabilities(module, manifest, BROWSER_HOST_GRANTS);
 
+  if (pid === null) {
+    pid = role === "kernel" ? 1 : ownerKernel.reserve(manifest, role === "service" ? 1 : 2);
+    if (pid <= 0) throw new Error(`Kernel rejected process reservation (${pid})`);
+  }
   const process = {
     pid,
     appId: manifest.id,
+    effectiveAppId, manifest, controller: ownerKernel,
+    started: !deferEntry, entryExport: entryName,
     name: manifest.name ?? manifest.id,
     role,
     acceptsKeyboardInput: manifest.capabilities.includes("tty.input"),
@@ -244,14 +264,20 @@ async function startProcess({ manifest, bytes, role, entryName, stepName, pid = 
     windowHandle: -1,
     runtime: null,
     host: null,
-    vfs: await createAppVfs(manifest.id, manifest.limits?.openFiles),
+    vfs: await createAppVfs(effectiveAppId, manifest.limits?.openFiles),
     stepExport: stepName || null,
   };
+  const processPipeline = pipelineTransport;
   process.host = createMaiaHostImports({
     graphics: processGraphics(process),
     vfs: process.vfs,
     streams: streamBroker,
     processId: process.pid,
+    processArgs,
+    pipeline: manifest.capabilities.includes("process.pipeline") ? {
+      start: packet => processPipeline.start(process.pid, packet, process),
+      wait: (group, capacity) => processPipeline.wait(process.pid, group, capacity),
+    } : null,
     log: (level, message) => {
       status.textContent = message;
       (level >= 2 ? console.error : console.log)(
@@ -290,10 +316,21 @@ async function startProcess({ manifest, bytes, role, entryName, stepName, pid = 
       );
     }
 
+    if (role !== "kernel" && ownerKernel !== kernelController) throw new Error("Kernel restarted during process startup");
     process.runtime = runtime;
+    if (role === "kernel") {
+      kernelController = new KernelProcessController(runtime.instance);
+      process.controller = kernelController;
+      if (kernelController.reserve(manifest, 0) !== 1) throw new Error("Kernel boot reservation failed");
+      pipelineTransport = new KernelPipelineTransport({controller: kernelController, streams: streamBroker,
+        spawn: spawnKernelWorker, stop: stopKernelProcess});
+    }
     process.running = true;
     runningProcesses.add(process);
-    entry();
+    if (!deferEntry) {
+      entry();
+      if (process.running && process.controller.ready(process.pid) !== 0) throw new Error("Kernel rejected boot readiness");
+    }
     return process;
   } catch (error) {
     stopProcess(process, 1);
@@ -315,9 +352,12 @@ async function startApplication({ manifest, bytes, entryName, stepName }) {
   const ioResponse = await fetch(ioUrl);
   if (!ioResponse.ok) throw new Error(`I/O guest request failed: HTTP ${ioResponse.status}`);
   const ioBytes = await ioResponse.arrayBuffer();
-  const ioPid = nextProcessId++;
-  const shellPid = nextProcessId++;
-  bindShellStreams(streamBroker, ioPid, shellPid);
+  if (!kernelController || !pipelineTransport) throw new Error("Start the kernel before the shell");
+  const ioPid = kernelController.reserve(ioManifest, 1);
+  if (ioPid <= 0) throw new Error(`Kernel rejected I/O reservation (${ioPid})`);
+  const shellPid = kernelController.reserve(manifest, 2, ioPid);
+  if (shellPid <= 0) {kernelController.ready(ioPid, -1);await pipelineTransport.pump();throw new Error(`Kernel rejected shell reservation (${shellPid})`);}
+  await pipelineTransport.pump();
   let ioProcess = null;
   try {
     ioProcess = await startProcess({ manifest: ioManifest, bytes: ioBytes, role: "service", pid: ioPid,
@@ -326,9 +366,59 @@ async function startApplication({ manifest, bytes, entryName, stepName }) {
     return await startProcess({ manifest, bytes, entryName, stepName, role: "app", pid: shellPid });
   } catch (error) {
     if (ioProcess) stopProcess(ioProcess, 1);
+    kernelController?.ready(shellPid, -1);
+    await pipelineTransport?.pump();
     streamBroker.closeProcess(ioPid); streamBroker.closeProcess(shellPid);
     throw error;
   }
+}
+
+async function stopKernelProcess(pid, status) {
+  const process = [...runningProcesses].find(item => item.pid === pid);
+  if (process) stopProcess(process, status);
+  else {streamBroker.closeProcess(pid);kernelController?.exit(pid, status);}
+}
+
+async function spawnKernelWorker(action, owner) {
+  if (action.arg0 !== 1 || owner.controller !== kernelController) throw new Error("Invalid kernel worker package/boot");
+  if (!catPackage) catPackage = (async () => {
+    const root = new URL("/apps/cat/", window.location.href);
+    const response = await fetch(new URL("manifest.json",root));
+    if (!response.ok) throw new Error("Cat worker manifest unavailable");
+    const manifest = await response.json(), url = new URL(manifest.entry,root);
+    if (manifest.id !== "org.maiaplatform.cat" || url.origin !== root.origin || !url.pathname.startsWith(root.pathname)) throw new Error("Invalid cat worker package");
+    const binary = await fetch(url); if (!binary.ok) throw new Error("Cat worker binary unavailable");
+    return {manifest,bytes:await binary.arrayBuffer()};
+  })().catch(error => {catPackage=null;throw error;});
+  const pkg = await catPackage;
+  // Package index 1 has the fixed read-only resource profile reserved by kernel.
+  const workerProfile = new Set(["vfs.open","vfs.read","vfs.close","stream.read","stream.write","stream.close","process.args","process.exit"]);
+  if (pkg.manifest.capabilities.some(cap => !workerProfile.has(cap))) throw new Error("Worker package exceeds the kernel-reserved profile");
+  if (pkg.manifest.capabilities.some(cap => cap !== "process.args" && !owner.manifest.capabilities.includes(cap))) throw new Error("Worker capability delegation denied");
+  const manifest = {...pkg.manifest, limits:{...pkg.manifest.limits,
+    memoryPages:Math.min(pkg.manifest.limits.memoryPages,owner.manifest.limits.memoryPages,action.arg1),
+    openFiles:Math.min(pkg.manifest.limits.openFiles,owner.manifest.limits.openFiles,4)}};
+  return startProcess({manifest,bytes:pkg.bytes,role:"worker",pid:action.pid,
+    effectiveAppId:owner.effectiveAppId,processArgs:action.payload,deferEntry:true,
+    entryName:manifest.entryExport,stepName:manifest.stepExport});
+}
+
+function stepKernelProcesses() {
+  if (kernelProcess?.running && kernelProcess.stepExport) {
+    try {kernelProcess.runtime.exports[kernelProcess.stepExport]();}
+    catch(error){stopProcess(kernelProcess,1,true);console.error("Kernel trapped",error);return;}
+  }
+  if (!kernelController) return;
+  for (let budget=0;budget<16;++budget) {
+    const pid=kernelController.next();if(!pid)break;
+    const process=[...runningProcesses].find(item=>item.pid===pid);
+    if(!process || !process.running || !process.stepExport)continue;
+    try {
+      if(!process.started){process.started=true;process.runtime.exports[process.entryExport]();}
+      if(process.running)process.runtime.exports[process.stepExport]();
+    } catch(error){stopProcess(process,1,true);console.error(`[maia ${process.appId}] scheduler trapped`,error);}
+  }
+  void pipelineTransport?.pump().catch(error=>console.error("Kernel action transport failed",error));
 }
 
 async function launchSelectedApp() {
@@ -431,15 +521,7 @@ async function boot() {
 
   const tickLvgl = () => {
     lvglModule._maiaos_lvgl_tick();
-    for (const process of [...runningProcesses]) {
-      if (!process.stepExport || !process.running) continue;
-      try {
-        process.runtime.exports[process.stepExport]();
-      } catch (error) {
-        stopProcess(process, 1);
-        console.error(`[maia ${process.appId}] scheduler trapped`, error);
-      }
-    }
+    stepKernelProcesses();
     window.requestAnimationFrame(tickLvgl);
   };
   window.requestAnimationFrame(tickLvgl);
@@ -481,8 +563,13 @@ async function boot() {
           entryName: entry,
           stepName: step,
         };
+        if (role === "app") {
+          const response = await fetch("/platform/desktop-web/generated/kernel.wasm");
+          if (!response.ok) throw new Error("Kernel binary unavailable");
+          kernelProcess = await startProcess({manifest:kernelManifest,bytes:await response.arrayBuffer(),role:"kernel",entryName:kernelManifest.entryExport,stepName:kernelManifest.stepExport});
+        }
         const process = role === "app" ? await startApplication(options) : await startProcess(options);
-        kernelProcess = role === "kernel" ? process : null;
+        if (role === "kernel") kernelProcess = process;
         if (role === "app") {
           document.getElementById("app-status").textContent =
             `${process.name} running as PID ${process.pid}.`;

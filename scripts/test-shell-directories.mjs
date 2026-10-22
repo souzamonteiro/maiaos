@@ -19,7 +19,7 @@ async function shell({broker=new MaiaStreamBroker(),pid=3,peer=2,files={},capaci
   broker.alias(pid,1,2);broker.alias(peer,4,5);
   const vfs=new MemoryVfsAdapter({appId:manifest.id,maxOpenFiles:manifest.limits.openFiles,files});
   let exit=null,steps=0;
-  const host=createMaiaHostImports({vfs,graphics,streams:broker,processId:pid,onProcessExit:code=>{exit=code;}});
+  const host=createMaiaHostImports({vfs,graphics,pipeline:{start(){throw new Error("Unexpected pipeline in builtin-only regression");},wait(){throw new Error("Unexpected pipeline wait");}},streams:broker,processId:pid,onProcessExit:code=>{exit=code;}});
   const instance=await WebAssembly.instantiate(module,host.imports);host.attachInstance(instance);
   instance.exports.maia_app_start();const stack=instance.exports.__stack_ptr.value;
   const memory=instance.exports.memory.buffer.byteLength;

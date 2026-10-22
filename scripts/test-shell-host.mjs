@@ -85,7 +85,7 @@ const io = await instantiateNativeWasmFile(new URL("../apps/io/io.wasm", import.
 assertManifestCapabilities(io.module, ioManifest, ioManifest.capabilities);
 assert.ok(WebAssembly.Module.imports(io.module).every(({module}) => module !== "maia.vfs"));
 ioHost.attachInstance(io.instance);
-const host = createMaiaHostImports({ vfs, graphics: Object.fromEntries(["windowCreate", "labelCreate", "labelSetText", "buttonCreate", "objectDestroy"].map(name => [name, () => { throw new Error("Shell must not call graphics"); }])), streams: broker, processId: 3,
+const host = createMaiaHostImports({ vfs, pipeline:{start(){throw new Error("Unexpected pipeline in builtin-only regression");},wait(){throw new Error("Unexpected pipeline wait");}}, graphics: Object.fromEntries(["windowCreate", "labelCreate", "labelSetText", "buttonCreate", "objectDestroy"].map(name => [name, () => { throw new Error("Shell must not call graphics"); }])), streams: broker, processId: 3,
   onProcessExit: (code) => { exitCode = code; } });
 const guest = await instantiateNativeWasmFile(wasmPath, host.imports);
 assertManifestCapabilities(guest.module, manifest, manifest.capabilities);
@@ -187,7 +187,7 @@ const commandCases = [
   ['echo "open', "syntax error\n"],
   ["echo tail\\", "syntax error\n"],
   ["echo |", "syntax error\n"],
-  ["echo hidden | pwd", "unsupported syntax: simple commands only\n"],
+  ["echo hidden | pwd", "shell: unsupported pipeline command\n"],
   ["echo hidden < input.txt", "unsupported syntax: simple commands only\n"],
   ["name=value echo hidden", "unsupported syntax: simple commands only\n"],
   ["if true; then echo hidden; fi", "unsupported syntax: simple commands only\n"],

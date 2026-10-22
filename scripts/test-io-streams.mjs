@@ -21,7 +21,7 @@ function ports(broker, capacity = 4096) {
 }
 async function guest(name, broker, vfs = new MemoryVfsAdapter({appId: manifests[name].id})) {
   const labels = new Map(); let nextHandle = 1; let exit = null;
-  const host = createMaiaHostImports({streams: broker, processId: name === "io" ? 2 : 3, vfs,
+  const host = createMaiaHostImports({pipeline:{start(){throw new Error("Unexpected pipeline in stream-only regression");},wait(){throw new Error("Unexpected pipeline wait");}},streams: broker, processId: name === "io" ? 2 : 3, vfs,
     graphics: {windowCreate: () => nextHandle++, labelCreate: (_parent, text) => {
       const handle = nextHandle++; labels.set(handle, text); return handle;
     }, labelSetText: (handle, text) => { labels.set(handle, text); return 0; },

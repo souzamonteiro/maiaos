@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "id": "org.maiaplatform.cat",
+  "name": "Maia cat worker",
+  "version": "0.1.0",
+  "entry": "cat.wasm",
+  "entryExport": "maia_app_start",
+  "stepExport": "maiaos_step",
+  "abi": "maiaos-0",
+  "wasmProfile": "maiaos-embedded-v0",
+  "capabilities": [
+    "vfs.open",
+    "vfs.read",
+    "vfs.close",
+    "stream.read",
+    "stream.write",
+    "stream.close",
+    "process.args",
+    "process.exit"
+  ],
+  "limits": {
+    "memoryPages": 32,
+    "openFiles": 4
+  }
+}
